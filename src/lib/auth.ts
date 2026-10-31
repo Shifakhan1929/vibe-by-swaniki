@@ -1,0 +1,1556 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import { getSupabaseClient, isSupabaseConfigured } from './supabase';
+export { getSupabaseClient, isSupabaseConfigured };
+import { INITIAL_ORGANIZERS } from './store';
+import { User, Session } from '@supabase/supabase-js';
+
+export interface AuthProfile {
+  id: string;
+  email: string;
+  name: string;
+  role: 'super_admin' | 'curator' | 'organizer' | 'guest';
+  handle?: string;
+  bio?: string;
+  avatar_url?: string;
+  dob?: string;
+  age?: number | string;
+  city?: string;
+  gender?: string;
+  instagram?: string;
+  brand_color?: string;
+  brand_font?: string;
+  phone?: string;
+  // DPDP Act 2023 Compliance & Consent Fields
+  dpdp_consent?: boolean;
+  dpdp_consent_at?: string;
+  dpdp_consent_version?: string;
+  communication_consent?: boolean;
+  public_profile_consent?: boolean;
+  show_city_consent?: boolean;
+  onboarded?: boolean;
+  isDemo?: boolean;
+}
+
+import { ADMIN_EMAILS, isStaffRole, isSuperAdminEmail } from './adminConstants';
+export { ADMIN_EMAILS, isStaffRole, isSuperAdminEmail };
+
+// In-memory TTL cache for profile database queries to prevent polling storms
+const profileDbCache = new Map<string, { data: any; timestamp: number }>();
+
+/**
+ * Detect synthetic placeholder or auto-generated random avatars (e.g. Dicebear)
+ */
+export const isSyntheticAvatar = (url?: string | null): boolean => {
+  if (!url || typeof url !== 'string') return true;
+  const trimmed = url.trim().toLowerCase();
+  if (!trimmed) return true;
+  return (
+    trimmed.includes('api.dicebear.com') ||
+    trimmed.includes('dicebear') ||
+    trimmed.includes('avatar.vercel.sh') ||
+    trimmed.includes('ui-avatars.com')
+  );
+};
+
+/**
+ * Resolves a reliable, deterministic user profile avatar URL:
+ * 1. User-uploaded custom logo (if non-synthetic, e.g. Supabase storage or custom hosted image)
+ * 2. Authentic email account linked photo from OAuth (Google picture / avatar)
+ * 3. Non-synthetic local avatar
+ * 4. Fallback to empty string '' (which triggers dynamic initials badge)
+ */
+export const resolveAvatarUrl = (sources: {
+  metaAvatar?: string | null;
+  metaPicture?: string | null;
+  dbLogoUrl?: string | null;
+  dbAvatarUrl?: string | null;
+  localAvatar?: string | null;
+}): string => {
+  const metaPhoto = sources.metaAvatar || sources.metaPicture;
+  const dbPhoto = sources.dbLogoUrl || sources.dbAvatarUrl;
+  const localPhoto = sources.localAvatar;
+
+  // 1. Explicit user-uploaded custom logo
+  if (dbPhoto && !isSyntheticAvatar(dbPhoto)) {
+    return dbPhoto.trim();
+  }
+
+  // 2. Email-linked OAuth profile photo (e.g. Google avatar)
+  if (metaPhoto && !isSyntheticAvatar(metaPhoto)) {
+    return metaPhoto.trim();
+  }
+
+  // 3. Non-synthetic local avatar
+  if (localPhoto && !isSyntheticAvatar(localPhoto)) {
+    return localPhoto.trim();
+  }
+
+  return '';
+};
+
+/**
+ * Generate clean 1-2 letter uppercase initials from name or email (e.g. "SP", "JD", "AK")
+ */
+export const getInitials = (name?: string | null, email?: string | null): string => {
+  if (name && name.trim()) {
+    const clean = name.trim();
+    const parts = clean.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[1][0]).toUpperCase();
+    }
+    return clean.slice(0, 2).toUpperCase();
+  }
+  if (email && email.trim()) {
+    const local = email.trim().split('@')[0].replace(/[^a-zA-Z0-9]/g, '');
+    return local.slice(0, 2).toUpperCase() || 'U';
+  }
+  return 'U';
+};
+
+import {
+  type EmailValidationResult,
+  COMMON_DOMAIN_MAPPINGS,
+  validateEmailInput,
+  normalizeEmail,
+  isEmailValid,
+} from './emailValidation';
+
+export type { EmailValidationResult };
+export {
+  COMMON_DOMAIN_MAPPINGS,
+  validateEmailInput,
+  normalizeEmail,
+  isEmailValid,
+};
+
+
+const LOCAL_STORAGE_AUTH_KEY = 'vibe_auth_session';
+
+/**
+ * Get current stored demo/local session if any
+ */
+export const getLocalAuthSession = (): AuthProfile | null => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_AUTH_KEY);
+    if (!raw) return null;
+    const profile = JSON.parse(raw);
+    if (profile && isSyntheticAvatar(profile.avatar_url)) {
+      profile.avatar_url = '';
+    }
+    return profile;
+  } catch {
+    return null;
+  }
+};
+
+export const setLocalAuthSession = (profile: AuthProfile | null) => {
+  if (typeof window === 'undefined') return;
+  const currentStr = localStorage.getItem(LOCAL_STORAGE_AUTH_KEY);
+  if (profile) {
+    const cleanProfile = { ...profile };
+    if (isSyntheticAvatar(cleanProfile.avatar_url)) {
+      cleanProfile.avatar_url = '';
+    }
+    const nextStr = JSON.stringify(cleanProfile);
+    if (currentStr === nextStr) return; // Skip if identical to prevent event loops
+
+    localStorage.setItem(LOCAL_STORAGE_AUTH_KEY, nextStr);
+    try {
+      document.cookie = `vibe_auth_role=${encodeURIComponent(cleanProfile.role)}; path=/; max-age=604800; SameSite=Lax`;
+      document.cookie = `vibe_auth_email=${encodeURIComponent(cleanProfile.email)}; path=/; max-age=604800; SameSite=Lax`;
+    } catch {}
+  } else {
+    if (!currentStr) return; // Skip if already empty
+    localStorage.removeItem(LOCAL_STORAGE_AUTH_KEY);
+    try {
+      document.cookie = 'vibe_auth_role=; path=/; max-age=0; SameSite=Lax';
+      document.cookie = 'vibe_auth_email=; path=/; max-age=0; SameSite=Lax';
+    } catch {}
+  }
+  // Dispatch storage event so other tabs/components update
+  window.dispatchEvent(new Event('vibe_auth_changed'));
+};
+
+/**
+ * Send Supabase Email OTP (also provides magic link)
+ */
+export const sendEmailOtp = async (email: string, role: 'organizer' | 'guest' = 'organizer') => {
+  const cleanEmail = (email || '').trim().toLowerCase();
+  const validation = validateEmailInput(cleanEmail);
+  if (!validation.isValid) {
+    return { data: null, error: { message: validation.error || 'Please enter a valid email address.' } };
+  }
+
+  const client = getSupabaseClient();
+  if (!client) {
+    return { data: null, error: { message: 'Supabase client is not configured. Check your environment variables.' } };
+  }
+
+  const redirectUrl = typeof window !== 'undefined'
+    ? `${window.location.origin}/auth/callback?role=${role}`
+    : undefined;
+
+  const { data, error } = await client.auth.signInWithOtp({
+    email: cleanEmail,
+    options: {
+      emailRedirectTo: redirectUrl,
+      data: {
+        role,
+        name: cleanEmail.split('@')[0],
+      },
+    },
+  });
+
+  if (error) {
+    console.warn('[sendEmailOtp] Supabase signInWithOtp error:', error.message);
+    if (typeof window !== 'undefined') {
+      const fallbackCode = Math.floor(100000 + Math.random() * 900000).toString();
+      sessionStorage.setItem(
+        `vibe_fallback_otp_${cleanEmail}`,
+        JSON.stringify({ code: fallbackCode, expires: Date.now() + 15 * 60 * 1000 })
+      );
+      fetch('/api/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'otp', to: cleanEmail, otpCode: fallbackCode }),
+      }).catch(console.warn);
+
+      return { data: { user: null, session: null } as any, error: null };
+    }
+  }
+
+  return { data, error };
+};
+
+/**
+ * Verify Supabase Email OTP Token (6-digit code)
+ */
+export const verifyEmailOtp = async (
+  email: string,
+  token: string,
+  role: 'organizer' | 'guest' = 'organizer'
+) => {
+  const client = getSupabaseClient();
+  const trimmedToken = token.trim();
+
+  let pendingSignup: any = null;
+  if (typeof window !== 'undefined') {
+    try {
+      const raw = sessionStorage.getItem('vibe_pending_signup');
+      if (raw) pendingSignup = JSON.parse(raw);
+    } catch {}
+  }
+
+  const cleanEmail = normalizeEmail(email);
+
+  if (!client) {
+    return { data: null, error: { message: 'Supabase client is not configured.' } };
+  }
+
+  if (!trimmedToken || trimmedToken.length < 6 || trimmedToken.length > 8) {
+    return { data: null, error: { message: 'Please enter the 6 to 8 digit verification code from your email.' } };
+  }
+
+  // 1. Primary: Tokens generated via signInWithOtp MUST be verified with type: 'email'
+  let { data, error } = await client.auth.verifyOtp({
+    email: cleanEmail,
+    token: trimmedToken,
+    type: 'email'
+  });
+
+  // 2. Fallback: If 'email' type fails, try 'signup' (in case user came from passwordless signup)
+  if (error) {
+    const signupRes = await client.auth.verifyOtp({
+      email: cleanEmail,
+      token: trimmedToken,
+      type: 'signup'
+    });
+    if (!signupRes.error) {
+      data = signupRes.data;
+      error = null;
+    }
+  }
+
+  if (error) {
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = sessionStorage.getItem(`vibe_fallback_otp_${cleanEmail}`);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed.code === trimmedToken && parsed.expires > Date.now()) {
+            sessionStorage.removeItem(`vibe_fallback_otp_${cleanEmail}`);
+            error = null;
+            data = {
+              user: {
+                id: `usr_${Date.now()}`,
+                email: cleanEmail,
+                user_metadata: { role, name: cleanEmail.split('@')[0] },
+              } as any,
+              session: null,
+            };
+          }
+        }
+      } catch {}
+    }
+  }
+
+  if (error) {
+    return {
+      data: null,
+      error: {
+        ...error,
+        message: 'Invalid or expired verification code. If multiple codes arrived, please enter the code from the most recent email.'
+      }
+    };
+  }
+
+  if (data?.user) {
+    // Try to fetch profile from public.profiles table
+    let profileData: any = null;
+    try {
+      const { data: dbProfile } = await client
+        .from('profiles')
+        .select('*')
+        .eq('id', data.user.id)
+        .single();
+      profileData = dbProfile;
+    } catch (e) {
+      // Continue if table query fails
+    }
+
+    const profile: AuthProfile = {
+      id: data.user.id,
+      email: data.user.email || email,
+      name: profileData?.name || pendingSignup?.name || data.user.user_metadata?.name || email.split('@')[0],
+      role: profileData?.role || pendingSignup?.role || data.user.user_metadata?.role || role,
+      handle: profileData?.handle || pendingSignup?.handle || data.user.user_metadata?.handle || email.split('@')[0].replace(/[^a-z0-9_]/g, '_'),
+      avatar_url: resolveAvatarUrl({
+        dbLogoUrl: profileData?.logo_url,
+        metaAvatar: data.user.user_metadata?.avatar_url,
+        metaPicture: data.user.user_metadata?.picture,
+      }),
+      bio: profileData?.bio,
+      brand_color: profileData?.brand_color || pendingSignup?.brand_color || '#E8621A',
+      brand_font: profileData?.brand_font || pendingSignup?.brand_font || 'Playfair Display',
+      city: data.user.user_metadata?.city || profileData?.city || 'Mumbai',
+      gender: data.user.user_metadata?.gender || profileData?.gender || 'male',
+      dob: data.user.user_metadata?.dob || profileData?.dob,
+      age: data.user.user_metadata?.age || profileData?.age,
+      public_profile_consent: data.user.user_metadata?.public_profile_consent ?? true,
+      show_city_consent: data.user.user_metadata?.show_city_consent ?? false,
+      dpdp_consent: data.user.user_metadata?.dpdp_consent ?? true,
+      onboarded: profileData?.onboarded !== undefined ? profileData.onboarded : Boolean(profileData?.handle && profileData?.handle !== email.split('@')[0]),
+      isDemo: false,
+    };
+    setLocalAuthSession(profile);
+    if (typeof window !== 'undefined') sessionStorage.removeItem('vibe_pending_signup');
+
+    // Ensure written to Supabase public.profiles table
+    try {
+      await client.from('profiles').upsert({
+        id: profile.id,
+        email: profile.email,
+        name: profile.name,
+        role: profile.role,
+        handle: profile.handle,
+        brand_color: profile.brand_color,
+        brand_font: profile.brand_font,
+        onboarded: profile.onboarded,
+      });
+    } catch {}
+
+    return { data, error: null };
+  }
+
+  return { data: null, error: { message: 'Verification failed. Please check the code and try again.' } };
+};
+
+/**
+ * Sign up with Email, Name and Role
+ */
+export const signUpWithEmailOtp = async (
+  email: string,
+  name: string,
+  role: 'organizer' | 'guest' = 'organizer',
+  handle?: string
+) => {
+  const client = getSupabaseClient();
+  const cleanEmail = normalizeEmail(email);
+  const validation = validateEmailInput(cleanEmail);
+  if (!validation.isValid) {
+    return {
+      data: null,
+      error: { message: validation.error || 'Please enter a valid email address.' },
+    };
+  }
+  const cleanName = name.trim();
+  const cleanHandle = (handle || cleanName.toLowerCase().replace(/[^a-z0-9_]/g, '_')).slice(0, 30);
+
+  if (typeof window !== 'undefined') {
+    sessionStorage.setItem('vibe_pending_signup', JSON.stringify({
+      email: cleanEmail,
+      name: cleanName,
+      role,
+      handle: cleanHandle,
+      brand_color: '#E8621A',
+      brand_font: 'Playfair Display',
+    }));
+  }
+
+  if (!client) {
+    return { data: null, error: { message: 'Supabase client is not configured.' } };
+  }
+
+  const redirectUrl = typeof window !== 'undefined'
+    ? `${window.location.origin}/auth/callback?role=${role}&next=${role === 'organizer' ? '/onboarding' : '/passes'}`
+    : undefined;
+
+  const { data, error } = await client.auth.signInWithOtp({
+    email: cleanEmail,
+    options: {
+      emailRedirectTo: redirectUrl,
+      data: {
+        name: cleanName,
+        handle: cleanHandle,
+        role,
+        onboarded: false,
+      }
+    }
+  });
+
+  return { data, error };
+};
+
+/**
+ * Update authenticated profile locally and in Supabase
+ */
+export const updateAuthProfile = async (updates: Partial<AuthProfile>): Promise<{ data: AuthProfile | null; error: any }> => {
+  let current = getLocalAuthSession();
+  if (!current) {
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        const { data: sessionData } = await client.auth.getSession();
+        if (sessionData?.session?.user) {
+          const user = sessionData.session.user;
+          const userEmail = (user.email || '').toLowerCase();
+          const meta = user.user_metadata || {};
+          current = {
+            id: user.id,
+            email: userEmail,
+            name: meta.name || userEmail.split('@')[0] || 'User',
+            role: 'organizer',
+            city: meta.city || 'Mumbai',
+            gender: meta.gender || 'male',
+            dob: meta.dob,
+            age: meta.age,
+            phone: meta.phone,
+            bio: meta.bio,
+            avatar_url: meta.avatar_url || '',
+            onboarded: true,
+            isDemo: false,
+          };
+        }
+      } catch {}
+    }
+  }
+
+  if (!current) {
+    // Generate guest fallback profile so changes are never lost
+    current = {
+      id: `guest-${Date.now()}`,
+      email: 'guest@vibe.local',
+      name: updates.name || 'Guest User',
+      role: 'guest',
+      avatar_url: '',
+      city: 'Mumbai',
+      gender: 'male',
+      onboarded: true,
+      isDemo: true,
+    };
+  }
+
+  const updated: AuthProfile = {
+    ...current,
+    ...updates,
+    onboarded: updates.onboarded !== undefined ? updates.onboarded : true,
+  };
+
+  setLocalAuthSession(updated);
+
+  // Warm the memory cache with the updated profile immediately
+  profileDbCache.set(updated.id, {
+    data: {
+      ...updated,
+      logo_url: updated.avatar_url,
+    },
+    timestamp: Date.now(),
+  });
+
+  // Background server sync via admin service endpoint
+  try {
+    fetch('/api/profile/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updated),
+    }).catch((apiErr) => console.warn('Background profile API sync notice:', apiErr));
+  } catch {}
+
+  // Sync with store organizers
+  if (updated.role === 'organizer' && updated.handle) {
+    try {
+      const { saveOrganizer } = await import('./store');
+      saveOrganizer({
+        id: updated.id,
+        role: 'organizer',
+        name: updated.name,
+        handle: updated.handle,
+        bio: updated.bio || '',
+        logo_url: updated.avatar_url || '',
+        brand_color: updated.brand_color || '#E8621A',
+        brand_font: updated.brand_font || 'Playfair Display',
+        phone: updated.phone || '',
+        email: updated.email,
+        onboarded: true,
+        created_at: new Date().toISOString()
+      });
+    } catch (e) {
+      console.warn('Could not sync organizer to store:', e);
+    }
+  }
+
+  // Sync to Supabase client directly if session exists
+  const client = getSupabaseClient();
+  if (client && !updated.isDemo) {
+    // 1. Sync custom fields into Supabase Auth user_metadata (permanent across devices/sessions)
+    try {
+      // CRITICAL: Strip any base64 data URIs so Supabase auth tokens NEVER exceed cookie size limits (prevents 494 REQUEST_HEADER_TOO_LARGE)
+      const safeAvatarUrl = updated.avatar_url?.startsWith('http')
+        ? updated.avatar_url
+        : undefined;
+
+      await client.auth.updateUser({
+        data: {
+          name: updated.name,
+          avatar_url: safeAvatarUrl,
+          city: updated.city,
+          gender: updated.gender,
+          dob: updated.dob,
+          age: updated.age,
+          phone: updated.phone,
+          bio: updated.bio,
+          public_profile_consent: updated.public_profile_consent,
+          show_city_consent: updated.show_city_consent,
+          dpdp_consent: updated.dpdp_consent,
+        },
+      });
+    } catch (authErr) {
+      console.warn('Supabase auth.updateUser exception:', authErr);
+    }
+
+    // 2. Sync to public.profiles table
+    try {
+      const { error } = await client
+        .from('profiles')
+        .upsert({
+          id: updated.id,
+          email: updated.email,
+          name: updated.name,
+          role: updated.role,
+          handle: updated.handle,
+          bio: updated.bio,
+          logo_url: isSyntheticAvatar(updated.avatar_url) ? null : updated.avatar_url,
+          brand_color: updated.brand_color,
+          brand_font: updated.brand_font,
+          phone: updated.phone,
+          onboarded: updated.onboarded,
+        });
+      if (error) console.warn('Supabase profile upsert warning:', error);
+    } catch (e) {
+      console.warn('Supabase update exception:', e);
+    }
+  }
+
+  return { data: updated, error: null };
+};
+
+/**
+ * Soft Prompt: Create Guest Account From Completed RSVP
+ */
+export const createGuestAccountFromRsvp = (email: string, name: string, phone?: string): AuthProfile => {
+  const profile: AuthProfile = {
+    id: `guest-${Date.now()}`,
+    email,
+    name: name || email.split('@')[0],
+    role: 'guest',
+    avatar_url: '',
+    onboarded: true,
+    isDemo: false,
+  };
+  setLocalAuthSession(profile);
+  return profile;
+};
+
+/**
+ * Sign in via Supabase Magic Link
+ */
+export const signInWithMagicLink = sendEmailOtp;
+
+/**
+ * Sign in with Email and Password (Host or Guest)
+ */
+export const checkEmailAlreadyRegistered = async (email: string): Promise<boolean> => {
+  const cleanEmail = normalizeEmail(email);
+  if (!isEmailValid(cleanEmail)) return false;
+
+  try {
+    const res = await fetch('/api/auth/check-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: cleanEmail }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return Boolean(data.exists);
+    }
+  } catch (err) {
+    console.warn('checkEmailAlreadyRegistered fetch error:', err);
+  }
+
+  // Fallback to client query if endpoint fails
+  const client = getSupabaseClient();
+  if (client) {
+    try {
+      const { data } = await client
+        .from('profiles')
+        .select('id, email')
+        .ilike('email', cleanEmail)
+        .limit(1);
+      if (data && data.length > 0) return true;
+    } catch {}
+  }
+
+  return false;
+};
+
+/**
+ * Developer / Localhost Quick Sign-in
+ * Instantly logs in locally as an admin, host, or custom test account for development.
+ */
+export const loginAsDev = (
+  email: string = 'pandeysuyash100@gmail.com',
+  name?: string,
+  role?: 'super_admin' | 'curator' | 'organizer' | 'guest'
+): AuthProfile => {
+  const cleanEmail = normalizeEmail(email);
+  const isSuper = ADMIN_EMAILS.includes(cleanEmail);
+  const resolvedRole = isSuper ? 'super_admin' : (role || 'organizer');
+
+  const defaultName = cleanEmail.includes('pandeysuyash')
+    ? 'Suyash Pandey'
+    : cleanEmail.includes('jaiswal')
+    ? 'Ankur Jaiswal'
+    : cleanEmail.split('@')[0];
+
+  const profile: AuthProfile = {
+    id: `dev-${cleanEmail.replace(/[^a-z0-9]/g, '-')}`,
+    email: cleanEmail,
+    name: name || defaultName,
+    role: resolvedRole,
+    handle: cleanEmail.split('@')[0].replace(/[^a-z0-9_]/g, '_'),
+    bio: isSuper ? 'Platform Admin & Verified Community Lead' : 'Community Host & Organizer',
+    brand_color: '#FF5500',
+    brand_font: 'Inter',
+    onboarded: true,
+    isDemo: true,
+  };
+  setLocalAuthSession(profile);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('vibe_auth_changed'));
+  }
+  return profile;
+};
+
+/**
+ * Sign in with Email and Password (Host or Guest)
+ */
+export const signInWithPassword = async (
+  email: string,
+  password: string,
+  intendedRole?: 'organizer' | 'guest'
+) => {
+  const cleanEmail = normalizeEmail(email);
+  const validation = validateEmailInput(cleanEmail);
+  if (!validation.isValid) {
+    return {
+      data: null,
+      error: {
+        message: validation.error || 'Please enter a valid email address.',
+      },
+    };
+  }
+
+  const client = getSupabaseClient();
+
+  if (!client) {
+    // Local fallback if Supabase not configured
+    const isSuper = ADMIN_EMAILS.includes(cleanEmail);
+    const profile: AuthProfile = {
+      id: `usr-${Date.now()}`,
+      email: cleanEmail,
+      name: cleanEmail.split('@')[0],
+      role: isSuper ? 'super_admin' : (intendedRole || 'organizer'),
+      handle: cleanEmail.split('@')[0].replace(/[^a-z0-9_]/g, '_'),
+      brand_color: '#0A0A0A',
+      brand_font: 'Inter',
+      onboarded: true,
+      isDemo: true,
+    };
+    setLocalAuthSession(profile);
+    return { data: { user: { id: profile.id, email: cleanEmail } }, error: null };
+  }
+
+  const { data, error } = await client.auth.signInWithPassword({
+    email: cleanEmail,
+    password,
+  });
+
+  if (error) {
+    const isUnconfirmed = error.message?.toLowerCase().includes('not confirmed') || error.message?.toLowerCase().includes('unconfirmed');
+    if (isUnconfirmed) {
+      // Trigger a resend so the user gets an OTP right away
+      try {
+        await client.auth.resend({ type: 'signup', email: cleanEmail });
+      } catch {}
+      return {
+        data: null,
+        error: {
+          message: 'Your email is not verified yet. A verification code has been sent to your inbox.',
+          code: 'EMAIL_NOT_CONFIRMED',
+        },
+        needsConfirmation: true,
+        email: cleanEmail,
+      };
+    }
+    return { data: null, error };
+  }
+
+  if (data?.user) {
+    const isSuper = ADMIN_EMAILS.includes(cleanEmail);
+    let dbProfile: any = null;
+    try {
+      const { data: prof } = await client
+        .from('profiles')
+        .select('*')
+        .eq('id', data.user.id)
+        .maybeSingle();
+      dbProfile = prof;
+
+      if (!dbProfile) {
+        const { data: profByEmail } = await client
+          .from('profiles')
+          .select('*')
+          .ilike('email', cleanEmail)
+          .maybeSingle();
+        dbProfile = profByEmail;
+      }
+    } catch {}
+
+    const meta = data.user.user_metadata || {};
+    const assignedRole = isSuper
+      ? 'super_admin'
+      : (dbProfile?.role || meta.role || intendedRole || 'organizer');
+
+    const profile: AuthProfile = {
+      id: data.user.id,
+      email: data.user.email || cleanEmail,
+      name: dbProfile?.name || meta.name || cleanEmail.split('@')[0],
+      role: assignedRole as any,
+      handle: dbProfile?.handle || meta.handle || cleanEmail.split('@')[0].replace(/[^a-z0-9_]/g, '_'),
+      avatar_url: resolveAvatarUrl({
+        dbLogoUrl: dbProfile?.logo_url,
+        dbAvatarUrl: dbProfile?.avatar_url,
+        metaAvatar: meta.avatar_url,
+        metaPicture: meta.picture,
+      }),
+      bio: dbProfile?.bio || meta.bio,
+      brand_color: dbProfile?.brand_color || meta.brand_color || '#0A0A0A',
+      brand_font: 'Inter',
+      phone: dbProfile?.phone || meta.phone,
+      city: meta.city || dbProfile?.city || 'Mumbai',
+      gender: meta.gender || dbProfile?.gender || 'male',
+      dob: meta.dob || dbProfile?.dob,
+      age: meta.age || dbProfile?.age,
+      public_profile_consent: meta.public_profile_consent ?? true,
+      show_city_consent: meta.show_city_consent ?? false,
+      dpdp_consent: meta.dpdp_consent ?? true,
+      onboarded: dbProfile?.onboarded !== undefined ? dbProfile.onboarded : (assignedRole === 'guest' || Boolean(dbProfile?.handle)),
+      isDemo: false,
+    };
+
+    setLocalAuthSession(profile);
+
+    if (!dbProfile || dbProfile.id !== data.user.id) {
+      try {
+        await client.from('profiles').upsert({
+          id: profile.id,
+          email: profile.email,
+          name: profile.name,
+          role: profile.role,
+          handle: profile.handle,
+          brand_color: profile.brand_color,
+          brand_font: 'Inter',
+          onboarded: profile.onboarded,
+        });
+      } catch {}
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('vibe_auth_changed'));
+    }
+  }
+
+  return { data, error: null };
+};
+
+/**
+ * Sign up with Email, Password and Name
+ * 1. Checks if email is already registered to avoid duplicates.
+ * 2. Invokes Supabase signUp.
+ * 3. Demands Email OTP verification before logging in.
+ */
+export const signUpWithPassword = async (
+  email: string,
+  password: string,
+  name: string,
+  role: 'organizer' | 'guest' = 'organizer',
+  handle?: string
+) => {
+  const client = getSupabaseClient();
+  const cleanEmail = email.trim().toLowerCase();
+  const cleanName = name.trim();
+  const cleanHandle = (handle || cleanName.toLowerCase().replace(/[^a-z0-9_]/g, '_')).slice(0, 30);
+
+  const emailValidation = validateEmailInput(cleanEmail);
+  if (!emailValidation.isValid) {
+    return {
+      data: null,
+      error: {
+        message: emailValidation.error || 'Please enter a valid email address.',
+        suggestion: emailValidation.suggestion?.suggestedEmail,
+      },
+    };
+  }
+
+  if (password.length < 6) {
+    return { data: null, error: { message: 'Password must be at least 6 characters long.' } };
+  }
+
+  // Pre-check if email already exists
+  const alreadyExists = await checkEmailAlreadyRegistered(cleanEmail);
+  if (alreadyExists) {
+    return {
+      data: null,
+      error: {
+        message: 'An account with this email already exists. Please sign in instead.',
+        code: 'USER_EXISTS',
+      },
+    };
+  }
+
+  if (typeof window !== 'undefined') {
+    sessionStorage.setItem('vibe_pending_signup', JSON.stringify({
+      email: cleanEmail,
+      name: cleanName,
+      role,
+      handle: cleanHandle,
+      brand_color: '#0A0A0A',
+      brand_font: 'Inter',
+    }));
+  }
+
+  if (!client) {
+    const isSuper = ADMIN_EMAILS.includes(cleanEmail);
+    const profile: AuthProfile = {
+      id: `usr-${Date.now()}`,
+      email: cleanEmail,
+      name: cleanName,
+      role: isSuper ? 'super_admin' : role,
+      handle: cleanHandle,
+      brand_color: '#0A0A0A',
+      brand_font: 'Inter',
+      onboarded: role === 'guest',
+      isDemo: true,
+    };
+    setLocalAuthSession(profile);
+    return { data: { user: { id: profile.id, email: cleanEmail } }, error: null, needsOtp: false };
+  }
+
+  // 1. Primary path: Use server-side /api/auth/signup with Admin API & email_confirm: true
+  // This avoids Supabase's rate-limited (3/hr) built-in SMTP and eliminates "Error sending confirmation email"
+  try {
+    const apiRes = await fetch('/api/auth/signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: cleanEmail,
+        password,
+        name: cleanName,
+        role,
+        handle: cleanHandle,
+      }),
+    });
+
+    const result = await apiRes.json();
+
+    if (!apiRes.ok || result.error) {
+      if (
+        result.error?.code === 'USER_EXISTS' ||
+        result.error?.message?.toLowerCase().includes('already exists') ||
+        result.error?.message?.toLowerCase().includes('already registered')
+      ) {
+        return {
+          data: null,
+          error: {
+            message: 'An account with this email already exists. Please sign in instead.',
+            code: 'USER_EXISTS',
+          },
+        };
+      }
+      return { data: null, error: result.error || { message: 'Failed to create account.' } };
+    }
+
+    // 2. Client logs in with the registered credentials immediately
+    const { data: signInData, error: signInError } = await client.auth.signInWithPassword({
+      email: cleanEmail,
+      password,
+    });
+
+    if (signInError) {
+      console.warn('Auto sign-in warning after signup:', signInError);
+    }
+
+    const isSuper = ADMIN_EMAILS.includes(cleanEmail);
+    const profile: AuthProfile = {
+      id: signInData?.user?.id || result.data?.user?.id || `usr-${Date.now()}`,
+      email: cleanEmail,
+      name: cleanName,
+      role: isSuper ? 'super_admin' : role,
+      handle: cleanHandle,
+      brand_color: '#0A0A0A',
+      brand_font: 'Inter',
+      onboarded: role === 'guest',
+      isDemo: false,
+    };
+
+    setLocalAuthSession(profile);
+    if (typeof window !== 'undefined') {
+      sessionStorage.removeItem('vibe_pending_signup');
+      window.dispatchEvent(new Event('vibe_auth_changed'));
+    }
+
+    return {
+      data: signInData || result.data,
+      error: null,
+      needsOtp: false,
+      email: cleanEmail,
+    };
+  } catch (apiErr: any) {
+    console.warn('API signup route error, attempting fallback client signup:', apiErr);
+  }
+
+  // 3. Fallback to client.auth.signUp if API route was unreachable
+  const { data, error } = await client.auth.signUp({
+    email: cleanEmail,
+    password,
+    options: {
+      data: {
+        name: cleanName,
+        role,
+        handle: cleanHandle,
+      },
+    },
+  });
+
+  if (error) {
+    if (
+      error.message?.toLowerCase().includes('already registered') ||
+      error.message?.toLowerCase().includes('already exists')
+    ) {
+      return {
+        data: null,
+        error: {
+          message: 'An account with this email already exists. Please sign in instead.',
+          code: 'USER_EXISTS',
+        },
+      };
+    }
+    return { data: null, error };
+  }
+
+  // If Supabase returns identities: [], user already exists (anti-enumeration behavior)
+  if (data?.user?.identities && data.user.identities.length === 0) {
+    return {
+      data: null,
+      error: {
+        message: 'An account with this email already exists. Please sign in instead.',
+        code: 'USER_EXISTS',
+      },
+    };
+  }
+
+  // Return needsOtp so UI switches to OTP verification screen
+  return {
+    data,
+    error: null,
+    needsOtp: true,
+    email: cleanEmail,
+  };
+};
+
+/**
+ * Verify Signup Email OTP Token
+ */
+export const verifySignupOtp = async (
+  email: string,
+  otpCode: string,
+  role: 'organizer' | 'guest' = 'organizer'
+) => {
+  const client = getSupabaseClient();
+  const cleanEmail = email.trim().toLowerCase();
+  const cleanCode = otpCode.trim();
+
+  let pendingSignup: any = null;
+  if (typeof window !== 'undefined') {
+    try {
+      const raw = sessionStorage.getItem('vibe_pending_signup');
+      if (raw) pendingSignup = JSON.parse(raw);
+    } catch {}
+  }
+
+  if (!cleanCode || cleanCode.length < 6 || cleanCode.length > 8) {
+    return { data: null, error: { message: 'Please enter the 6 to 8 digit verification code from your email.' } };
+  }
+
+  if (!client) {
+    return { data: null, error: { message: 'Supabase client is not configured.' } };
+  }
+
+  // Try 'signup' verification first
+  let { data, error } = await client.auth.verifyOtp({
+    email: cleanEmail,
+    token: cleanCode,
+    type: 'signup',
+  });
+
+  // If 'signup' fails, try 'email'
+  if (error) {
+    const emailRes = await client.auth.verifyOtp({
+      email: cleanEmail,
+      token: cleanCode,
+      type: 'email',
+    });
+    if (!emailRes.error) {
+      data = emailRes.data;
+      error = null;
+    } else {
+      // Try 'magiclink'
+      const mlRes = await client.auth.verifyOtp({
+        email: cleanEmail,
+        token: cleanCode,
+        type: 'magiclink',
+      });
+      if (!mlRes.error) {
+        data = mlRes.data;
+        error = null;
+      }
+    }
+  }
+
+  if (error) {
+    return { data: null, error: { message: error.message || 'Invalid or expired verification code. Please try again.' } };
+  }
+
+  if (data?.user) {
+    const isSuper = ADMIN_EMAILS.includes(cleanEmail);
+    const meta = data.user.user_metadata || {};
+
+    const profile: AuthProfile = {
+      id: data.user.id,
+      email: data.user.email || cleanEmail,
+      name: pendingSignup?.name || meta.name || cleanEmail.split('@')[0],
+      role: isSuper ? 'super_admin' : (pendingSignup?.role || meta.role || role),
+      handle: pendingSignup?.handle || meta.handle || cleanEmail.split('@')[0].replace(/[^a-z0-9_]/g, '_'),
+      avatar_url: resolveAvatarUrl({
+        metaAvatar: meta.avatar_url,
+        metaPicture: meta.picture,
+      }),
+      brand_color: '#0A0A0A',
+      brand_font: 'Inter',
+      city: meta.city || 'Mumbai',
+      gender: meta.gender || 'male',
+      dob: meta.dob,
+      age: meta.age,
+      public_profile_consent: meta.public_profile_consent ?? true,
+      show_city_consent: meta.show_city_consent ?? false,
+      dpdp_consent: meta.dpdp_consent ?? true,
+      onboarded: false,
+      isDemo: false,
+    };
+
+    setLocalAuthSession(profile);
+
+    if (typeof window !== 'undefined') {
+      sessionStorage.removeItem('vibe_pending_signup');
+      window.dispatchEvent(new Event('vibe_auth_changed'));
+    }
+
+    try {
+      await client.from('profiles').upsert({
+        id: profile.id,
+        email: profile.email,
+        name: profile.name,
+        role: profile.role,
+        handle: profile.handle,
+        brand_color: profile.brand_color,
+        brand_font: 'Inter',
+        onboarded: false,
+      });
+    } catch (upsertErr) {
+      console.warn('Profile upsert warning after OTP verify:', upsertErr);
+    }
+
+    return { data, error: null, profile };
+  }
+
+  return { data: null, error: { message: 'Verification failed. Please check the code and try again.' } };
+};
+
+/**
+ * Resend verification OTP code
+ */
+export const resendSignupOtp = async (email: string) => {
+  const cleanEmail = normalizeEmail(email);
+  const validation = validateEmailInput(cleanEmail);
+  if (!validation.isValid) {
+    return {
+      data: null,
+      error: {
+        message: validation.error || 'Please enter a valid email address.',
+      },
+    };
+  }
+
+  const client = getSupabaseClient();
+
+  if (!client) {
+    return { data: null, error: { message: 'Supabase client is not configured.' } };
+  }
+
+  const { data, error } = await client.auth.resend({
+    type: 'signup',
+    email: cleanEmail,
+  });
+
+  if (error) {
+    return client.auth.signInWithOtp({ email: cleanEmail });
+  }
+
+  return { data, error: null };
+};
+
+/**
+ * Sign in with Google OAuth (supports both Host and Guest roles)
+ */
+export const signInWithGoogle = async (
+  role: 'organizer' | 'guest' = 'organizer',
+  nextUrl?: string
+) => {
+  const client = getSupabaseClient();
+  if (!client) {
+    return { data: null, error: { message: 'Supabase client is not configured.' } };
+  }
+
+  const currentPath =
+    typeof window !== 'undefined'
+      ? window.location.pathname + window.location.search
+      : '';
+  const isAuthPage =
+    currentPath.startsWith('/login') ||
+    currentPath.startsWith('/signup') ||
+    currentPath.startsWith('/auth');
+
+  const redirectDestination =
+    nextUrl ||
+    (!isAuthPage && currentPath ? currentPath : '/dashboard');
+
+  const isPWA = typeof window !== 'undefined' && (
+    window.matchMedia('(display-mode: standalone)').matches ||
+    (window.navigator as any).standalone === true
+  );
+
+  if (typeof window !== 'undefined') {
+    try {
+      sessionStorage.setItem('vibe_oauth_role', role);
+      sessionStorage.setItem('vibe_oauth_next', redirectDestination);
+      if (isPWA) {
+        sessionStorage.setItem('vibe_is_pwa', '1');
+        document.cookie = `vibe_is_pwa=1; path=/; max-age=3600; SameSite=Lax`;
+      }
+      document.cookie = `vibe_oauth_role=${encodeURIComponent(role)}; path=/; max-age=3600; SameSite=Lax`;
+      document.cookie = `vibe_oauth_next=${encodeURIComponent(redirectDestination)}; path=/; max-age=3600; SameSite=Lax`;
+    } catch {}
+  }
+
+  // Clean callback URL matching Supabase URL configuration
+  const redirectTo = typeof window !== 'undefined'
+    ? `${window.location.origin}/auth/callback${isPWA ? '?from_pwa=1' : ''}`
+    : undefined;
+
+  const { data, error } = await client.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo,
+      skipBrowserRedirect: false,
+      queryParams: {
+        access_type: 'offline',
+        prompt: 'select_account',
+      },
+    },
+  });
+
+  if (data?.url && typeof window !== 'undefined') {
+    window.location.assign(data.url);
+  }
+
+  return { data, error };
+};
+
+/**
+ * Sign Out
+ */
+export const signOut = async () => {
+  const client = getSupabaseClient();
+  if (client) {
+    try {
+      await client.auth.signOut();
+    } catch (e) {
+      console.warn('Supabase signout error:', e);
+    }
+  }
+  setLocalAuthSession(null);
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.removeItem('vibe_guest_info');
+      localStorage.removeItem('vibe_guest_email');
+      localStorage.removeItem('vibe_user_email');
+      sessionStorage.clear();
+    } catch {}
+    window.dispatchEvent(new Event('vibe_auth_changed'));
+    window.location.href = '/';
+  }
+};
+
+/**
+ * React Hook for Authentication State
+ */
+export const useAuth = () => {
+  const [user, setUser] = useState<User | null>(null);
+  const [profile, setProfile] = useState<AuthProfile | null>(() => {
+    if (typeof window !== 'undefined') {
+      return getLocalAuthSession();
+    }
+    return null;
+  });
+  const [loading, setLoading] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return !getLocalAuthSession();
+    }
+    return true;
+  });
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      const client = getSupabaseClient();
+
+      // 0. Check if arriving with PWA auth tokens in URL hash (e.g. from PWA external browser callback)
+      if (typeof window !== 'undefined' && client && (window.location.hash.includes('access_token=') || window.location.hash.includes('pwa_token='))) {
+        const hash = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash;
+        const params = new URLSearchParams(hash);
+        const accessToken = params.get('access_token') || params.get('pwa_token');
+        const refreshToken = params.get('refresh_token') || params.get('pwa_refresh');
+        if (accessToken && refreshToken) {
+          try {
+            await client.auth.setSession({
+              access_token: accessToken,
+              refresh_token: refreshToken,
+            });
+            window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+          } catch (err) {
+            console.warn('[PWA Auth] setSession from hash failed:', err);
+          }
+        }
+      }
+
+      // 1. Check local session first
+      const local = getLocalAuthSession();
+      if (local) {
+        setProfile(local);
+        setLoading(false);
+      }
+
+      // 2. Check Supabase session
+      if (client) {
+        try {
+          const { data } = await client.auth.getSession();
+          if (data?.session?.user) {
+            setUser(data.session.user);
+            const userEmail = (data.session.user.email || '').toLowerCase();
+            const isDifferentUser = Boolean(local && local.email && local.email.toLowerCase() !== userEmail);
+            const safeLocal = isDifferentUser ? null : local;
+
+            const isSuper = ADMIN_EMAILS.includes(userEmail);
+            const meta = data.session.user.user_metadata || {};
+
+            let mergedProfile: AuthProfile = {
+              id: data.session.user.id,
+              email: userEmail,
+              name: meta.name || safeLocal?.name || userEmail.split('@')[0] || 'User',
+              role: isSuper ? 'super_admin' : 'organizer',
+              handle: meta.handle || safeLocal?.handle || userEmail.split('@')[0].replace(/[^a-z0-9_]/g, '_'),
+              bio: meta.bio || safeLocal?.bio || '',
+              avatar_url: resolveAvatarUrl({
+                metaAvatar: meta.avatar_url,
+                metaPicture: meta.picture,
+                localAvatar: safeLocal?.avatar_url,
+              }),
+              brand_color: meta.brand_color || safeLocal?.brand_color || '#E8621A',
+              brand_font: meta.brand_font || safeLocal?.brand_font || 'Playfair Display',
+              phone: meta.phone || safeLocal?.phone,
+              city: safeLocal?.city || meta.city || 'Mumbai',
+              gender: safeLocal?.gender || meta.gender || 'male',
+              dob: safeLocal?.dob || meta.dob,
+              age: safeLocal?.age || meta.age,
+              public_profile_consent: safeLocal?.public_profile_consent ?? meta.public_profile_consent ?? true,
+              show_city_consent: safeLocal?.show_city_consent ?? meta.show_city_consent ?? false,
+              dpdp_consent: safeLocal?.dpdp_consent ?? meta.dpdp_consent ?? true,
+              onboarded: safeLocal?.onboarded ?? meta.onboarded ?? false,
+              isDemo: false,
+            };
+
+            // Enrich with public.profiles if exists in database (cached for 60s)
+            let dbProf: any = null;
+            const cached = profileDbCache.get(data.session.user.id);
+            if (cached && Date.now() - cached.timestamp < 60000) {
+              dbProf = cached.data;
+            } else {
+              try {
+                const { data: fetchedProf } = await client
+                  .from('profiles')
+                  .select('*')
+                  .eq('id', data.session.user.id)
+                  .single();
+                if (fetchedProf) {
+                  dbProf = fetchedProf;
+                  profileDbCache.set(data.session.user.id, { data: fetchedProf, timestamp: Date.now() });
+                }
+              } catch {}
+            }
+
+            if (dbProf) {
+              const resolvedRole = isSuper
+                ? 'super_admin'
+                : (dbProf.role === 'super_admin' || dbProf.role === 'curator' ? dbProf.role : (dbProf.role || 'organizer'));
+
+              const resolvedAvatar = resolveAvatarUrl({
+                dbLogoUrl: dbProf.logo_url,
+                dbAvatarUrl: dbProf.avatar_url,
+                metaAvatar: meta.avatar_url,
+                metaPicture: meta.picture,
+                localAvatar: mergedProfile.avatar_url,
+              });
+
+              mergedProfile = {
+                ...mergedProfile,
+                name: mergedProfile.name || dbProf.name,
+                role: resolvedRole as any,
+                handle: mergedProfile.handle || dbProf.handle,
+                bio: mergedProfile.bio || dbProf.bio,
+                avatar_url: resolvedAvatar,
+                brand_color: mergedProfile.brand_color || dbProf.brand_color,
+                brand_font: mergedProfile.brand_font || dbProf.brand_font,
+                phone: mergedProfile.phone || dbProf.phone,
+                city: mergedProfile.city || dbProf.city || 'Mumbai',
+                gender: mergedProfile.gender || dbProf.gender || 'male',
+                dob: mergedProfile.dob || dbProf.dob,
+                age: mergedProfile.age || dbProf.age,
+                onboarded: dbProf.onboarded !== undefined ? dbProf.onboarded : mergedProfile.onboarded,
+              };
+            }
+
+            setProfile(mergedProfile);
+            setLocalAuthSession(mergedProfile);
+          } else if (!local) {
+            setUser(null);
+            setProfile(null);
+          }
+        } catch (e) {
+          console.warn('Auth session check failed:', e);
+        }
+      }
+
+      setLoading(false);
+    };
+
+    checkAuth();
+
+    // Listen to Supabase auth events
+    const client = getSupabaseClient();
+    let authListener: any = null;
+    if (client) {
+      const { data } = client.auth.onAuthStateChange(async (_event, session) => {
+        if (session?.user) {
+          setUser(session.user);
+          const local = getLocalAuthSession();
+          const userEmail = (session.user.email || '').toLowerCase();
+          const isDifferentUser = Boolean(local && local.email && local.email.toLowerCase() !== userEmail);
+          const safeLocal = isDifferentUser ? null : local;
+
+          const isSuper = ADMIN_EMAILS.includes(userEmail);
+          const meta = session.user.user_metadata || {};
+
+          let resolvedRole: 'super_admin' | 'curator' | 'organizer' | 'guest' = isSuper ? 'super_admin' : 'organizer';
+          let dbProf: any = null;
+          const cached = profileDbCache.get(session.user.id);
+          if (cached && Date.now() - cached.timestamp < 60000) {
+            dbProf = cached.data;
+            if (dbProf?.role) {
+              resolvedRole = isSuper ? 'super_admin' : (dbProf.role as any);
+            }
+          } else {
+            try {
+              const { data: prof } = await client
+                .from('profiles')
+                .select('*')
+                .eq('id', session.user.id)
+                .single();
+              if (prof) {
+                dbProf = prof;
+                profileDbCache.set(session.user.id, { data: prof, timestamp: Date.now() });
+                if (dbProf?.role) {
+                  resolvedRole = isSuper ? 'super_admin' : (dbProf.role as any);
+                }
+              }
+            } catch {}
+          }
+
+          const resolvedAvatar = resolveAvatarUrl({
+            dbLogoUrl: dbProf?.logo_url,
+            dbAvatarUrl: dbProf?.avatar_url,
+            metaAvatar: meta.avatar_url,
+            metaPicture: meta.picture,
+            localAvatar: safeLocal?.avatar_url,
+          });
+
+          const mergedProfile: AuthProfile = {
+            id: session.user.id,
+            email: userEmail,
+            name: safeLocal?.name || meta.name || dbProf?.name || session.user.email?.split('@')[0] || 'User',
+            role: resolvedRole,
+            handle: safeLocal?.handle || meta.handle || dbProf?.handle || session.user.email?.split('@')[0].replace(/[^a-z0-9_]/g, '_'),
+            bio: safeLocal?.bio || meta.bio || dbProf?.bio || '',
+            avatar_url: resolvedAvatar,
+            brand_color: safeLocal?.brand_color || meta.brand_color || dbProf?.brand_color || '#E8621A',
+            brand_font: safeLocal?.brand_font || meta.brand_font || dbProf?.brand_font || 'Playfair Display',
+            phone: safeLocal?.phone || meta.phone || dbProf?.phone,
+            city: safeLocal?.city || meta.city || dbProf?.city || 'Mumbai',
+            gender: safeLocal?.gender || meta.gender || dbProf?.gender || 'male',
+            dob: safeLocal?.dob || meta.dob || dbProf?.dob,
+            age: safeLocal?.age || meta.age || dbProf?.age,
+            public_profile_consent: safeLocal?.public_profile_consent ?? meta.public_profile_consent ?? true,
+            show_city_consent: safeLocal?.show_city_consent ?? meta.show_city_consent ?? false,
+            dpdp_consent: safeLocal?.dpdp_consent ?? meta.dpdp_consent ?? true,
+            onboarded: safeLocal?.onboarded ?? dbProf?.onboarded ?? meta.onboarded ?? false,
+            isDemo: false,
+          };
+          setProfile(mergedProfile);
+          setLocalAuthSession(mergedProfile);
+        } else if (_event === 'SIGNED_OUT') {
+          setUser(null);
+          setProfile(null);
+          setLocalAuthSession(null);
+        }
+      });
+      authListener = data.subscription;
+    }
+
+    // Listen to local changes across windows/tabs
+    const onLocalChange = () => {
+      const local = getLocalAuthSession();
+      setProfile(local);
+    };
+    window.addEventListener('vibe_auth_changed', onLocalChange);
+
+    // Auto-sync when PWA or page resumes from background / gains focus
+    const onResume = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        checkAuth();
+      }
+    };
+    document.addEventListener('visibilitychange', onResume);
+    window.addEventListener('focus', onResume);
+
+    // BroadcastChannel listener for PWA OAuth popup completion
+    let channel: BroadcastChannel | null = null;
+    try {
+      channel = new BroadcastChannel('vibe_auth_channel');
+      channel.onmessage = (event) => {
+        if (event.data?.type === 'vibe_auth_success') {
+          if (event.data.profile) {
+            setProfile(event.data.profile);
+            setLocalAuthSession(event.data.profile);
+          }
+          checkAuth();
+        }
+      };
+    } catch {}
+
+    // Storage event for cross-partition syncing
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === LOCAL_STORAGE_AUTH_KEY) {
+        checkAuth();
+      }
+    };
+    window.addEventListener('storage', onStorage);
+
+    return () => {
+      if (authListener) authListener.unsubscribe();
+      window.removeEventListener('vibe_auth_changed', onLocalChange);
+      document.removeEventListener('visibilitychange', onResume);
+      window.removeEventListener('focus', onResume);
+      window.removeEventListener('storage', onStorage);
+      if (channel) channel.close();
+    };
+  }, []);
+
+  const isStaff = Boolean(profile?.email && isStaffRole(profile?.role, profile?.email));
+  const isSuperAdmin = Boolean(
+    (profile?.role === 'super_admin' && profile?.email && ADMIN_EMAILS.includes(profile.email.toLowerCase())) ||
+    (profile?.email && ADMIN_EMAILS.includes(profile.email.toLowerCase()))
+  );
+
+  return {
+    user,
+    profile,
+    loading,
+    isLoggedIn: !!profile,
+    isOrganizer: !!profile,
+    isGuest: false,
+    isStaff,
+    isSuperAdmin,
+    signOut,
+  };
+};

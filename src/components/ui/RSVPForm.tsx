@@ -1,0 +1,808 @@
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import confetti from 'canvas-confetti';
+import {
+  CheckCircle2,
+  User,
+  Mail,
+  Phone,
+  Plus,
+  Sparkles,
+  Calendar,
+  ArrowRight,
+  KeyRound,
+  RotateCcw,
+  ArrowLeft,
+  AlertCircle,
+  Ticket,
+  Clock,
+  Users,
+  Utensils,
+  Shirt,
+  HelpCircle
+} from 'lucide-react';
+import { EventItem, RSVPItem } from '@/types';
+import { addRSVP, generateGoogleCalendarUrl, downloadICS, getEventRSVPs } from '@/lib/store';
+import { sendEmailOtp, verifyEmailOtp, createGuestAccountFromRsvp, getLocalAuthSession, validateEmailInput, useAuth } from '@/lib/auth';
+import DigitalPassModal from '@/components/ui/DigitalPassModal';
+import FollowButton from '@/components/ui/FollowButton';
+
+interface RSVPFormProps {
+  event: EventItem;
+  onSuccess?: (rsvp: RSVPItem) => void;
+  cardClass?: string;
+  innerCardClass?: string;
+  borderClass?: string;
+  headingClass?: string;
+  textSecondary?: string;
+  textMuted?: string;
+  accentColor?: string;
+  buttonPrimary?: string;
+}
+
+export default function RSVPForm({
+  event,
+  onSuccess,
+  cardClass,
+  innerCardClass,
+  borderClass,
+  headingClass,
+  textSecondary,
+  textMuted,
+  accentColor,
+  buttonPrimary
+}: RSVPFormProps) {
+  const router = useRouter();
+  const currentCount = getEventRSVPs(event.id).length;
+  const isFull = event.capacity ? currentCount >= event.capacity : false;
+
+  // Step flow: 'details' -> 'otp' -> 'success'
+  const [step, setStep] = useState<'details' | 'otp' | 'success'>('details');
+
+  // Form State
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [hasPlusOne, setHasPlusOne] = useState(false);
+  const [plusOneName, setPlusOneName] = useState('');
+  const [dietary, setDietary] = useState('none');
+  const [tshirt, setTshirt] = useState('M');
+  const [customAnswers, setCustomAnswers] = useState<Record<string, string>>({});
+
+  // OTP State
+  const [otpToken, setOtpToken] = useState('');
+  const [otpMessage, setOtpMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [emailSuggestion, setEmailSuggestion] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submittedRsvp, setSubmittedRsvp] = useState<RSVPItem | null>(null);
+
+  // Strict Rule: RSVPs can ONLY be created for Vibe-specific native events
+  if (event.source_type === 'external') {
+    return (
+      <div className={`p-6 rounded-2xl border ${borderClass || 'border-border'} ${cardClass || 'bg-surface'} text-center space-y-4`}>
+        <span className="text-xs font-bold uppercase tracking-wider px-2.5 py-1 rounded-full bg-accent/10 text-accent">
+          {event.source_platform ? `🎟️ ${event.source_platform.toUpperCase()}` : 'External Event'}
+        </span>
+        <h3 className={`text-lg font-bold ${headingClass || 'text-ink'}`}>
+          RSVPs Handled on Partner Platform
+        </h3>
+        <p className={`text-xs ${textSecondary || 'text-ink-secondary'} leading-relaxed`}>
+          Registrations for this experience are exclusively managed on{' '}
+          <span className="font-semibold text-ink">
+            {event.source_platform ? event.source_platform.toUpperCase() : 'the official platform'}
+          </span>.
+        </p>
+        {event.external_ticket_url && (
+          <a
+            href={event.external_ticket_url.startsWith('http') ? event.external_ticket_url : `https://${event.external_ticket_url}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={`inline-flex items-center justify-center gap-2 py-3.5 px-6 rounded-xl font-bold text-sm w-full shadow-md transition-all hover:scale-[1.02] active:scale-[0.98] ${buttonPrimary || 'bg-accent text-white'}`}
+          >
+            <span>Book on {event.source_platform ? event.source_platform.toUpperCase() : 'Official Site'} ↗</span>
+          </a>
+        )}
+      </div>
+    );
+  }
+  const [showPassModal, setShowPassModal] = useState(false);
+
+  // Check for existing RSVP
+  useEffect(() => {
+    const session = getLocalAuthSession();
+    if (session?.email) {
+      const rsvps = getEventRSVPs(event.id);
+      const existing = rsvps.find(r => r.email?.toLowerCase() === session.email?.toLowerCase());
+      if (existing) {
+        setSubmittedRsvp(existing);
+        setStep('success');
+      }
+    }
+  }, [event.id]);
+
+  const { profile, isLoggedIn } = useAuth();
+  const sessionUser = profile || (typeof window !== 'undefined' ? getLocalAuthSession() : null);
+  const namePlaceholder = sessionUser?.name ? `e.g. ${sessionUser.name}` : 'e.g. Priya Sharma';
+  const emailPlaceholder = sessionUser?.email ? `e.g. ${sessionUser.email}` : 'priya@example.com';
+  const phonePlaceholder = sessionUser?.phone ? sessionUser.phone.replace(/^\+91/, '') : '98200 12345';
+  const [resendCooldown, setResendCooldown] = useState(0);
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const interval = setInterval(() => {
+      setResendCooldown((prev) => Math.max(0, prev - 1));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [resendCooldown]);
+
+  // Finalize RSVP after verification or for authenticated users
+  const finalizeRsvp = async () => {
+    setIsSubmitting(true);
+    setErrorMessage(null);
+
+    const fullPhone = phone ? (phone.startsWith('+91') ? phone : `+91${phone.replace(/\D/g, '')}`) : '';
+    const isApprovalRequired = Boolean(event.rsvp_form_config?.approval_required);
+    const status = isApprovalRequired
+      ? 'waitlisted'
+      : (isFull && event.rsvp_form_config.waitlist_enabled ? 'waitlisted' : 'confirmed');
+
+    try {
+      const rsvp = await addRSVP({
+        event_id: event.id,
+        event_slug: event.slug,
+        name: name.trim(),
+        email: email.trim(),
+        phone: fullPhone,
+        status,
+        plus_one_name: hasPlusOne ? plusOneName.trim() : undefined,
+        custom_responses: {
+          ...(event.rsvp_form_config.ask_dietary ? { dietary } : {}),
+          ...(event.rsvp_form_config.ask_tshirt ? { tshirt } : {}),
+          ...customAnswers
+        }
+      });
+
+      // Confetti celebration if confirmed
+      if (status === 'confirmed') {
+        confetti({
+          particleCount: 90,
+          spread: 75,
+          origin: { y: 0.6 },
+          colors: ['#E8621A', '#C9A84C', '#1A1A2E', '#1A7A4A']
+        });
+      }
+
+      // Dispatch background whitelabeled email notification with confirmed digital pass
+      fetch('/api/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: status === 'waitlisted' ? 'waitlisted' : 'rsvp_confirmed',
+          to: email.trim(),
+          guestName: name.trim(),
+          rsvp,
+          event,
+          organizer: {
+            name: event.organizer_name,
+            brand_color: event.organizer_brand_color,
+            logo_url: event.organizer_logo,
+            handle: event.organizer_handle
+          }
+        })
+      }).catch(err => console.warn('Email notification note:', err));
+
+      setSubmittedRsvp(rsvp);
+      setIsSubmitting(false);
+      setStep('success');
+      if (onSuccess) onSuccess(rsvp);
+    } catch (err: any) {
+      setIsSubmitting(false);
+      setErrorMessage(err.message || 'Failed to confirm RSVP with server. Please try again.');
+    }
+  };
+
+  // 1. Details submission -> send Email OTP (or auto-confirm if already authenticated)
+  const handleDetailsSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim() || !email.trim() || !phone.trim()) return;
+
+    const cleanEmail = email.trim();
+    const emailValidation = validateEmailInput(cleanEmail);
+    if (!emailValidation.isValid) {
+      setErrorMessage(emailValidation.error || 'Please enter a valid email address.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    setOtpToken('');
+
+    const { error } = await sendEmailOtp(cleanEmail, 'guest');
+
+    setIsSubmitting(false);
+    if (error) {
+      setErrorMessage(error.message || 'Failed to send verification code. Please try again.');
+    } else {
+      setOtpMessage(`We sent a verification code to ${cleanEmail}`);
+      setResendCooldown(30);
+      setStep('otp');
+    }
+  };
+
+  // Dedicated resend handler with cooldown protection
+  const handleResendOtp = async () => {
+    if (resendCooldown > 0 || isSubmitting) return;
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    setOtpToken('');
+    const cleanEmail = email.trim();
+    const { error } = await sendEmailOtp(cleanEmail, 'guest');
+    setIsSubmitting(false);
+    if (error) {
+      setErrorMessage(error.message || 'Failed to resend code. Please try again.');
+    } else {
+      setOtpMessage(`A new verification code was sent to ${cleanEmail}`);
+      setResendCooldown(30);
+    }
+  };
+
+  // 2. OTP Verification & RSVP Confirmation (Supports 6 to 8 digit codes)
+  const handleOtpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanToken = otpToken.trim();
+    if (!cleanToken || cleanToken.length < 6 || cleanToken.length > 8) return;
+
+    setIsSubmitting(true);
+    setErrorMessage(null);
+
+    const { error } = await verifyEmailOtp(email.trim(), cleanToken, 'guest');
+
+    if (error) {
+      setIsSubmitting(false);
+      setErrorMessage(error.message || 'Invalid or expired verification code.');
+      return;
+    }
+
+    // OTP Verified! Finalize RSVP
+    await finalizeRsvp();
+  };
+
+  // 3. Soft Prompt: Activate Guest Account
+  const handleActivateGuestAccount = () => {
+    if (!submittedRsvp) return;
+    createGuestAccountFromRsvp(submittedRsvp.email, submittedRsvp.name, submittedRsvp.phone);
+    router.push('/passes');
+  };
+
+  // STEP 3: SUCCESS VIEW
+  if (step === 'success' && submittedRsvp) {
+    const isWaitlist = submittedRsvp.status === 'waitlisted';
+
+    return (
+      <div className={`${cardClass ? `${cardClass} space-y-5` : 'bg-white text-[#0F172A] border border-[#E2E8F0] shadow-xl rounded-2xl p-6 sm:p-8 space-y-5'} text-center animate-in fade-in zoom-in-95 duration-200`}>
+        <div className={`w-14 h-14 rounded-full mx-auto flex items-center justify-center ${isWaitlist ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-emerald-50 text-emerald-600 border border-emerald-100'}`}>
+          {isWaitlist ? <Clock className="w-7 h-7 text-amber-700" /> : <CheckCircle2 className="w-7 h-7 text-emerald-600" />}
+        </div>
+
+        <div>
+          <span className={`text-[11px] uppercase font-bold tracking-wider px-3 py-1 rounded-full ${isWaitlist ? 'bg-amber-50 text-amber-900 border border-amber-200' : 'bg-emerald-50 text-emerald-800 border border-emerald-200'}`}>
+            {isWaitlist ? (event.rsvp_form_config?.approval_required ? 'Request Under Host Review' : 'Waitlist Position Reserved') : 'RSVP Confirmed'}
+          </span>
+          <h3 className="font-display font-black text-2xl mt-2 text-[#0F172A] tracking-tight">
+            {isWaitlist ? (event.rsvp_form_config?.approval_required ? 'Invite Request Received' : 'You are on the waitlist') : `See you there, ${submittedRsvp.name.split(' ')[0]}!`}
+          </h3>
+          <p className="text-xs sm:text-sm mt-1.5 max-w-md mx-auto leading-relaxed text-[#64748B]">
+            {isWaitlist
+              ? (event.rsvp_form_config?.approval_required
+                  ? `Your invite request for ${event.title} has been submitted. The host will inspect and confirm attendees personally. Once approved, your confirmed pass with entry pass will be emailed to ${submittedRsvp.email}.`
+                  : `You've been added to the official waitlist for ${event.title}. When the organizer reviews and accepts your request, your confirmed digital pass with active entry QR code will be emailed to ${submittedRsvp.email}.`)
+              : (event.rsvp_form_config.confirmation_message || `A pass has been registered for ${submittedRsvp.email}. We will ping you on WhatsApp with access details.`)}
+          </p>
+
+          <div className="mt-3 inline-flex items-center justify-center gap-1.5 text-xs text-white/70 bg-[#111114] py-1.5 px-3.5 rounded-full border border-white/10">
+            <Mail className="w-3.5 h-3.5 text-white/60 shrink-0" />
+            <span>Digital pass emailed to <strong className="text-white">{submittedRsvp.email}</strong></span>
+          </div>
+        </div>
+
+        {/* View Digital Pass or Waitlist Receipt Button */}
+        <div className="pt-1">
+          <button
+            type="button"
+            onClick={() => setShowPassModal(true)}
+            className={`w-full inline-flex items-center justify-center gap-2 py-3.5 px-4 rounded-xl text-white text-xs font-bold shadow-sm hover-lift transition-all cursor-pointer ${
+              isWaitlist ? 'bg-amber-600 hover:bg-amber-700' : 'bg-[#FF5500] hover:bg-[#E04B00] shadow-lg shadow-[#FF5500]/25'
+            }`}
+          >
+            {isWaitlist ? (
+              <>
+                <Clock className="w-4 h-4 text-amber-200" />
+                <span>View Waitlist Queue Receipt</span>
+              </>
+            ) : (
+              <>
+                <Ticket className="w-4 h-4 text-white" />
+                <span>View Digital Admission Pass</span>
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Calendar Buttons */}
+        <div className="pt-1 flex flex-col sm:flex-row items-center justify-center gap-2.5">
+          <a
+            href={generateGoogleCalendarUrl(event)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-white/10 bg-[#111114] hover:bg-white/10 text-white text-xs font-semibold shadow-xs transition-all"
+          >
+            <Calendar className="w-3.5 h-3.5 text-[#FF5500]" />
+            <span>Add to Google Calendar</span>
+          </a>
+          <button
+            onClick={() => downloadICS(event)}
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-white/10 bg-[#111114] hover:bg-white/10 text-white text-xs font-semibold transition-all cursor-pointer"
+          >
+            <span>Download .ICS File</span>
+          </button>
+        </div>
+
+        {/* Follow Host Community */}
+        <div className="p-4 rounded-2xl bg-[#111114] border border-white/10 text-left space-y-2">
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="text-xs font-bold text-white block">
+                Follow {event.organizer_name}
+              </span>
+              <span className="text-[11px] text-white/50 block">
+                @{event.organizer_handle}
+              </span>
+            </div>
+            <FollowButton
+              organizerId={event.organizer_id}
+              organizerHandle={event.organizer_handle}
+              organizerName={event.organizer_name}
+              variant="pill"
+            />
+          </div>
+          <p className="text-[11px] text-white/60 leading-relaxed">
+            Stay in the loop when {event.organizer_name} drops secret gatherings and tickets.
+          </p>
+        </div>
+
+        {/* Soft prompt to create guest account */}
+        <div className="p-4 rounded-2xl bg-[#111114] border border-white/10 text-left space-y-2.5">
+          <div className="flex items-center gap-2 text-xs font-bold text-white">
+            <Sparkles className="w-4 h-4 text-[#FF5500] shrink-0" />
+            <span>Save pass to your personal Pass Wallet</span>
+          </div>
+          <p className="text-[11px] text-white/60 leading-relaxed">
+            Access your pass anytime, cancel bookings, get directions, and follow {event.organizer_name} for future gatherings.
+          </p>
+          <button
+            type="button"
+            onClick={handleActivateGuestAccount}
+            className="w-full inline-flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-[#FF5500] hover:bg-[#E04B00] text-white text-xs font-bold transition-all shadow-md shadow-[#FF5500]/20 cursor-pointer"
+          >
+            <span>View Digital Pass &amp; Bookings →</span>
+          </button>
+        </div>
+
+        <div className="text-center pt-1">
+          <button
+            type="button"
+            onClick={() => {
+              setStep('details');
+              setSubmittedRsvp(null);
+            }}
+            className="text-[11px] text-white/60 hover:text-white underline transition-colors cursor-pointer"
+          >
+            RSVP another guest or edit details
+          </button>
+        </div>
+
+        {/* Digital Admission Pass Modal */}
+        {showPassModal && (
+          <DigitalPassModal
+            rsvp={submittedRsvp}
+            event={event}
+            onClose={() => setShowPassModal(false)}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // STEP 2: EMAIL OTP VERIFICATION VIEW
+  if (step === 'otp') {
+    return (
+      <div className={`${cardClass ? `${cardClass} space-y-5` : 'bg-[#0D0D10] text-white border border-white/10 shadow-xl rounded-2xl p-6 space-y-5'} animate-in fade-in`}>
+        {/* Header */}
+        <div className="border-b border-white/10 pb-4">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[11px] uppercase font-bold tracking-wider text-[#FF5500]">
+              Verification
+            </span>
+            <span className="text-xs font-semibold text-white/60">
+              Step 2 of 2
+            </span>
+          </div>
+          <h3 className="font-display font-black text-2xl text-white tracking-tight">
+            Enter Verification Code
+          </h3>
+          <p className="text-xs mt-1 text-white/60 leading-relaxed">
+            We sent a verification code to{' '}
+            <strong className="text-white font-semibold">{email}</strong>
+          </p>
+        </div>
+
+        {errorMessage && (
+          <div className="flex items-start gap-2.5 p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-600 font-medium">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-500" />
+            <span>{errorMessage}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleOtpSubmit} className="space-y-5">
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wider mb-2 text-white/70">
+              Verification Code *
+            </label>
+            <input
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              required
+              autoFocus
+              maxLength={8}
+              value={otpToken}
+              onChange={(e) => setOtpToken(e.target.value.replace(/\D/g, ''))}
+              placeholder="••••••••"
+              className="w-full text-center text-xl sm:text-2xl font-mono font-bold tracking-[0.25em] sm:tracking-[0.35em] py-3.5 px-4 rounded-xl border border-white/15 bg-[#111114] text-white focus:border-[#FF5500] focus:outline-none transition-all placeholder:text-white/30"
+            />
+
+            <div className="flex items-center justify-between mt-2.5 text-xs text-white/60">
+              <span>Didn&apos;t receive code?</span>
+              <button
+                type="button"
+                onClick={handleResendOtp}
+                disabled={isSubmitting || resendCooldown > 0}
+                className="hover:underline inline-flex items-center gap-1 font-bold text-[#FF5500] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <RotateCcw className={`w-3.5 h-3.5 ${isSubmitting ? 'animate-spin' : ''}`} />
+                <span>{resendCooldown > 0 ? `Resend Code (${resendCooldown}s)` : 'Resend Code'}</span>
+              </button>
+            </div>
+
+            <p className="mt-3 text-[11px] text-white/40 text-center leading-relaxed">
+              💡 Tip: Check your <strong>Spam</strong> or <strong>Promotions</strong> folder if the code doesn&apos;t arrive immediately.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2.5 pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                setStep('details');
+                setErrorMessage(null);
+              }}
+              className="py-3 px-4 rounded-xl border border-white/15 bg-[#111114] hover:bg-white/10 text-xs font-bold text-white transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Back</span>
+            </button>
+
+            <button
+              type="submit"
+              disabled={isSubmitting || otpToken.length < 6}
+              className="flex-1 py-3.5 px-4 rounded-xl bg-[#FF5500] hover:bg-[#E04B00] disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs transition shadow-lg shadow-[#FF5500]/25 flex items-center justify-center gap-2 cursor-pointer"
+            >
+              {isSubmitting ? (
+                <span className="flex items-center gap-2">
+                  <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                  <span>Verifying Pass...</span>
+                </span>
+              ) : (
+                <>
+                  <span>Verify &amp; Claim Pass</span>
+                  <ArrowRight className="w-4 h-4" />
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+    );
+  }
+
+  // STEP 1: GUEST DETAILS VIEW
+  return (
+    <div className={`${cardClass ? `${cardClass} space-y-5` : 'bg-[#0D0D10] text-white border border-white/10 shadow-xl rounded-2xl p-6 space-y-5'}`}>
+      {/* Header */}
+      <div className="border-b border-white/10 pb-4">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-[11px] uppercase font-bold tracking-wider text-[#FF5500]">
+            {isFull ? 'Waitlist Open' : 'Register to Attend'}
+          </span>
+          <span className="text-xs font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 rounded-full">
+            {event.external_price_text || 'Free Admission'}
+          </span>
+        </div>
+        <h3 className="font-display font-black text-2xl text-white tracking-tight">
+          {isFull ? 'Join the Guest Waitlist' : 'Claim Your Pass'}
+        </h3>
+        <p className="text-xs mt-0.5 text-white/60">
+          Email OTP verified · Instant digital admission pass
+        </p>
+      </div>
+
+      {errorMessage && (
+        <div className="flex items-start gap-2.5 p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-400 font-medium">
+          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-400" />
+          <span>{errorMessage}</span>
+        </div>
+      )}
+
+      {sessionUser && (sessionUser.name || sessionUser.email) && !name && !email && (
+        <div className="flex items-center justify-between text-xs text-white/70 bg-white/[0.04] border border-white/10 px-3.5 py-2 rounded-xl mb-4">
+          <span className="truncate">
+            Signed in as <strong className="text-white">{sessionUser.name || sessionUser.email}</strong>
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              if (sessionUser.name) setName(sessionUser.name);
+              if (sessionUser.email) setEmail(sessionUser.email);
+              if (sessionUser.phone) setPhone(sessionUser.phone.replace(/^\+91/, ''));
+            }}
+            className="text-[#FF5500] hover:text-[#FF7733] font-bold text-xs shrink-0 cursor-pointer transition-colors ml-3 hover:underline"
+          >
+            Use my details
+          </button>
+        </div>
+      )}
+
+      <form onSubmit={handleDetailsSubmit} className="space-y-4">
+        {/* Full Name */}
+        <div>
+          <label className="block text-xs font-bold uppercase tracking-wider mb-1.5 text-white/70">
+            Full Name *
+          </label>
+          <div className="relative">
+            <User className="w-4 h-4 text-white/40 absolute left-3.5 top-3" />
+            <input
+              type="text"
+              required
+              placeholder={namePlaceholder}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full text-sm pl-10 pr-3.5 py-2.5 rounded-xl border border-white/15 bg-[#111114] text-white focus:border-[#FF5500] focus:outline-none transition-colors placeholder:text-white/35"
+            />
+          </div>
+        </div>
+
+        {/* Email */}
+        <div>
+          <label className="block text-xs font-bold uppercase tracking-wider mb-1.5 text-white/70">
+            Email Address (for OTP Verification) *
+          </label>
+          <div className="relative">
+            <Mail className="w-4 h-4 text-white/40 absolute left-3.5 top-3" />
+            <input
+              type="email"
+              required
+              placeholder={emailPlaceholder}
+              value={email}
+              onChange={(e) => {
+                const val = e.target.value;
+                setEmail(val);
+                if (errorMessage) setErrorMessage(null);
+                if (val.trim()) {
+                  const check = validateEmailInput(val.trim());
+                  if (check.suggestion) {
+                    setEmailSuggestion(check.suggestion.suggestedEmail);
+                  } else {
+                    setEmailSuggestion(null);
+                  }
+                } else {
+                  setEmailSuggestion(null);
+                }
+              }}
+              className="w-full text-sm pl-10 pr-3.5 py-2.5 rounded-xl border border-white/15 bg-[#111114] text-white focus:border-[#FF5500] focus:outline-none transition-colors placeholder:text-white/35"
+            />
+          </div>
+          {emailSuggestion && (
+            <button
+              type="button"
+              onClick={() => {
+                setEmail(emailSuggestion);
+                setEmailSuggestion(null);
+                setErrorMessage(null);
+              }}
+              className="mt-1.5 text-xs text-amber-300 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 rounded-lg px-2.5 py-1 flex items-center gap-1.5 transition-colors text-left font-medium"
+            >
+              <span>Did you mean <span className="underline font-bold">{emailSuggestion}</span>? Click to fix.</span>
+            </button>
+          )}
+          <p className="text-[11px] mt-1 text-white/50">
+            An OTP verification code will be sent to verify your pass.
+          </p>
+        </div>
+
+        {/* Indian Phone with +91 Prefix */}
+        <div>
+          <label className="block text-xs font-bold uppercase tracking-wider mb-1.5 text-white/70">
+            <Phone className="w-3 h-3 inline mr-1 text-white/40" />
+            WhatsApp Phone Number {event.rsvp_form_config.ask_phone === false ? '(Optional)' : '*'}
+          </label>
+          <div className="relative flex">
+            <span className="inline-flex items-center px-3.5 rounded-l-xl border border-r-0 border-white/15 bg-[#14171F] text-xs font-bold text-white/70">
+              +91
+            </span>
+            <input
+              type="tel"
+              required={event.rsvp_form_config.ask_phone !== false}
+              maxLength={10}
+              placeholder={phonePlaceholder}
+              value={phone}
+              onChange={(e) => setPhone(e.target.value.replace(/\D/g, ''))}
+              className="w-full text-sm px-3.5 py-2.5 rounded-r-xl border border-white/15 bg-[#111114] text-white focus:border-[#FF5500] focus:outline-none transition-colors placeholder:text-white/35"
+            />
+          </div>
+          <p className="text-[11px] mt-1 text-white/50">
+            Used for WhatsApp pass &amp; directions.
+          </p>
+        </div>
+
+        {/* Plus One Toggle */}
+        {event.rsvp_form_config.ask_plus_one && (
+          <div className="pt-2 border-t border-white/10">
+            <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-white">
+              <input
+                type="checkbox"
+                checked={hasPlusOne}
+                onChange={(e) => setHasPlusOne(e.target.checked)}
+                className="w-4 h-4 rounded text-[#FF5500] focus:ring-[#FF5500] accent-[#FF5500]"
+              />
+              <span>
+                <Users className="w-3.5 h-3.5 inline mr-1 text-white/60" />
+                Will you be bringing a +1 guest?
+              </span>
+            </label>
+
+            {hasPlusOne && (
+              <div className="mt-2.5">
+                <input
+                  type="text"
+                  required={hasPlusOne}
+                  placeholder="Full name of your +1 guest"
+                  value={plusOneName}
+                  onChange={(e) => setPlusOneName(e.target.value)}
+                  className="w-full text-sm px-3.5 py-2.5 rounded-xl border border-white/15 bg-[#111114] text-white focus:border-[#FF5500] focus:outline-none transition-colors placeholder:text-white/30"
+                />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Dietary Preferences */}
+        {event.rsvp_form_config.ask_dietary && (
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wider mb-1.5 text-white/70">
+              <Utensils className="w-3 h-3 inline mr-1 text-white/60" />
+              Dietary Preference
+            </label>
+            <select
+              value={dietary}
+              onChange={(e) => setDietary(e.target.value)}
+              className="w-full text-sm px-3 py-2.5 rounded-xl border border-white/15 bg-[#111114] text-white focus:border-[#FF5500] focus:outline-none transition-colors"
+            >
+              <option value="vegetarian" className="bg-[#111114] text-white">Vegetarian / Jain friendly</option>
+              <option value="vegan" className="bg-[#111114] text-white">Vegan</option>
+              <option value="non-veg" className="bg-[#111114] text-white">Non-Vegetarian</option>
+              <option value="none" className="bg-[#111114] text-white">No dietary preferences</option>
+            </select>
+          </div>
+        )}
+
+        {/* T-Shirt Size */}
+        {event.rsvp_form_config.ask_tshirt && (
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wider mb-1.5 text-white/70">
+              <Shirt className="w-3 h-3 inline mr-1 text-white/60" />
+              T-Shirt Size
+            </label>
+            <select
+              value={tshirt}
+              onChange={(e) => setTshirt(e.target.value)}
+              className="w-full text-sm px-3 py-2.5 rounded-xl border border-white/15 bg-[#111114] text-white focus:border-[#FF5500] focus:outline-none transition-colors"
+            >
+              <option value="XS" className="bg-[#111114] text-white">XS</option>
+              <option value="S" className="bg-[#111114] text-white">S</option>
+              <option value="M" className="bg-[#111114] text-white">M</option>
+              <option value="L" className="bg-[#111114] text-white">L</option>
+              <option value="XL" className="bg-[#111114] text-white">XL</option>
+              <option value="XXL" className="bg-[#111114] text-white">XXL</option>
+            </select>
+          </div>
+        )}
+
+        {/* Custom Form Fields */}
+        {event.rsvp_form_config.custom_fields?.map((field) => (
+          <div key={field.id}>
+            <label className="block text-xs font-bold uppercase tracking-wider mb-1.5 text-white/70">
+              <HelpCircle className="w-3 h-3 inline mr-1 text-white/60" />
+              {field.label} {field.required && '*'}
+            </label>
+            {field.type === 'dropdown' && field.options ? (
+              <select
+                required={field.required}
+                value={customAnswers[field.id] || ''}
+                onChange={(e) => setCustomAnswers({ ...customAnswers, [field.id]: e.target.value })}
+                className="w-full text-sm px-3 py-2.5 rounded-xl border border-white/15 bg-[#111114] text-white focus:border-[#FF5500] focus:outline-none transition-colors"
+              >
+                <option value="" className="bg-[#111114] text-white">Select an option</option>
+                {field.options.map((opt: string) => (
+                  <option key={opt} value={opt} className="bg-[#111114] text-white">{opt}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="text"
+                required={field.required}
+                placeholder="Your answer"
+                value={customAnswers[field.id] || ''}
+                onChange={(e) => setCustomAnswers({ ...customAnswers, [field.id]: e.target.value })}
+                className="w-full text-sm px-3.5 py-2.5 rounded-xl border border-white/15 bg-[#111114] text-white focus:border-[#FF5500] focus:outline-none transition-colors placeholder:text-white/30"
+              />
+            )}
+          </div>
+        ))}
+
+        {/* Host Custom Questions */}
+        {event.rsvp_form_config.custom_questions?.map((question, qIdx) => (
+          <div key={`cq-${qIdx}`}>
+            <label className="block text-xs font-bold uppercase tracking-wider mb-1.5 text-white/70">
+              <HelpCircle className="w-3 h-3 inline mr-1 text-[#FF5500]" />
+              {question} *
+            </label>
+            <input
+              type="text"
+              required
+              placeholder="Your answer"
+              value={customAnswers[question] || ''}
+              onChange={(e) => setCustomAnswers({ ...customAnswers, [question]: e.target.value })}
+              className="w-full text-sm px-3.5 py-2.5 rounded-xl border border-white/15 bg-[#111114] text-white focus:border-[#FF5500] focus:outline-none transition-colors placeholder:text-white/30"
+            />
+          </div>
+        ))}
+
+        {/* Submit Button */}
+        <button
+          type="submit"
+          disabled={isSubmitting}
+          className="w-full flex items-center justify-center gap-2 py-3.5 px-4 rounded-xl font-bold text-xs bg-[#FF5500] hover:bg-[#E04B00] text-white shadow-lg shadow-[#FF5500]/25 disabled:opacity-50 transition-all cursor-pointer"
+        >
+          {isSubmitting ? (
+            <span className="flex items-center gap-2">
+              <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+              Sending Verification Code...
+            </span>
+          ) : (
+            <>
+              <span>
+                {event.rsvp_form_config?.approval_required
+                  ? 'Request Invite & Verify Email'
+                  : (isFull ? 'Verify Email & Join Waitlist' : 'Continue to Verification')}
+              </span>
+              <ArrowRight className="w-4 h-4" />
+            </>
+          )}
+        </button>
+      </form>
+    </div>
+  );
+}

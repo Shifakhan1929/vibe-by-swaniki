@@ -1,0 +1,1176 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #050505;
+  --primary: #FF5500;
+  --muted-foreground: #9CA3AF;
+  --secondary: rgba(255, 255, 255, 0.15);
+  --font-display: var(--font-inter), sans-serif;
+  --brand: #FFFFFF;
+  --brand-mid: #E5E5E5;
+  --brand-deep: #050505;
+  --accent: #FF5500;
+  --accent-dark: #E04B00;
+  --accent-light: #261105;
+  --gold: #F59E0B;
+  --gold-light: #261D07;
+  --ink: #F3F4F6;
+  --ink-secondary: #9CA3AF;
+  --ink-muted: #6B7280;
+  --surface: #0A0A0C;
+  --surface-2: #050505;
+  --surface-3: #111114;
+  --border: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.2);
+  --success: #10B981;
+  --success-bg: rgba(16, 185, 129, 0.12);
+  --warning: #F59E0B;
+  --warning-bg: rgba(245, 158, 11, 0.12);
+}
+
+html {
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  scroll-behavior: auto;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  overflow-x: clip;
+}
+
+body {
+  background-color: #050505;
+  color: #F3F4F6;
+  font-family: var(--font-inter), -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  overflow-x: clip;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Scoped state when inside full-screen Vibe Instant reel */
+html.vibe-screen-active,
+html.vibe-screen-active body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* Hardware accelerated backdrop blur layers to prevent WebKit foggy rasterization */
+.backdrop-blur-sm,
+.backdrop-blur-md,
+.backdrop-blur-xl,
+.backdrop-blur-2xl {
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+/* Crisp image rendering */
+img {
+  image-rendering: -webkit-optimize-contrast;
+}
+
+/* Custom interactive cursor styles */
+@media (hover: hover) and (pointer: fine) {
+  a, button, [role="button"], .cursor-pointer {
+    cursor: pointer;
+  }
+}
+
+input, select, textarea {
+  color: var(--ink);
+}
+
+input::placeholder, textarea::placeholder {
+  color: var(--ink-muted);
+}
+
+/* Custom transitions and hover states */
+.hover-lift {
+  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.hover-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 32px rgba(26, 26, 46, 0.12);
+}
+
+.hover-lift-subtle {
+  transition: transform 150ms ease-out;
+}
+.hover-lift-subtle:hover {
+  transform: translateY(-1px);
+}
+
+/* Nav Link Underline Sweep */
+.nav-link-sweep {
+  position: relative;
+  display: inline-block;
+}
+.nav-link-sweep::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background-color: currentColor;
+  transform: scaleX(0);
+  transform-origin: right;
+  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.nav-link-sweep:hover::after {
+  transform: scaleX(1);
+  transform-origin: left;
+}
+
+/* Card Soft Mouse Spotlight */
+.spotlight-card {
+  position: relative;
+  overflow: hidden;
+}
+.spotlight-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: radial-gradient(
+    450px circle at var(--mouse-x, -500px) var(--mouse-y, -500px),
+    rgba(255, 255, 255, 0.08),
+    transparent 65%
+  );
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+  z-index: 1;
+}
+.spotlight-card:hover::before {
+  opacity: 1;
+}
+html.light .spotlight-card::before {
+  background: radial-gradient(
+    450px circle at var(--mouse-x, -500px) var(--mouse-y, -500px),
+    rgba(0, 0, 0, 0.04),
+    transparent 65%
+  );
+}
+
+/* Keyframe for live RSVP pop */
+@keyframes livePop {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+
+.animate-pop {
+  animation: livePop 350ms ease-out;
+}
+
+/* Master Prompt Motion: scale(1.12) pop on increment, 150ms ease */
+@keyframes counterPop {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+
+.animate-counter-pop {
+  animation: counterPop 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Subtle floating badge effect */
+@keyframes floatSubtle {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-4px); }
+}
+
+.animate-float {
+  animation: floatSubtle 4s ease-in-out infinite;
+}
+
+/* Glow pulse for live counters */
+@keyframes pulseGlow {
+  0%, 100% { opacity: 0.6; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.08); }
+}
+
+.animate-pulse-glow {
+  animation: pulseGlow 2.5s ease-in-out infinite;
+}
+
+/* Subtle high-energy buzz vibration for live icons */
+@keyframes buzz {
+  0%, 100% { transform: scale(1) rotate(0deg); }
+  15% { transform: scale(1.15) rotate(-6deg); }
+  30% { transform: scale(1.08) rotate(5deg); }
+  45% { transform: scale(1.18) rotate(-4deg); }
+  60% { transform: scale(1.05) rotate(3deg); }
+  75% { transform: scale(1.1) rotate(0deg); }
+}
+
+.animate-buzz {
+  animation: buzz 2.2s cubic-bezier(0.25, 1, 0.5, 1) infinite;
+}
+
+/* Tactile background textures for platform surfaces */
+.bg-texture-paper {
+  background-color: #FAF8F5;
+  background-image: 
+    radial-gradient(at 0% 0%, rgba(232, 98, 26, 0.03) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(15, 23, 42, 0.02) 0px, transparent 50%),
+    radial-gradient(#CBD5E1 0.85px, transparent 0.85px);
+  background-size: 100% 100%, 100% 100%, 24px 24px;
+}
+
+.bg-dot-grid {
+  background-image: radial-gradient(#E2E8F0 0.85px, transparent 0.85px);
+  background-size: 22px 22px;
+}
+
+/* Hide scrollbars for snap feeds */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Master Prompt: Hover lift: translateY(-1px) + shadow bloom */
+.shadow-hover-bloom {
+  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.shadow-hover-bloom:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 32px rgba(26, 26, 46, 0.18);
+}
+
+/* Keyframe for dynamic laser QR scanner sweep */
+@keyframes qrScan {
+  0% {
+    top: 2%;
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    top: 96%;
+    opacity: 0;
+  }
+}
+
+.animate-qr-scan {
+  animation: qrScan 2.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* Infinite marquee scrolling to the right for famous & most clicked events */
+@keyframes scrollRight {
+  0% {
+    transform: translateX(-50%);
+  }
+  100% {
+    transform: translateX(0%);
+  }
+}
+
+.animate-scroll-right {
+  display: flex;
+  width: max-content;
+  animation: scrollRight 35s linear infinite;
+  will-change: transform;
+}
+
+.animate-scroll-right:hover {
+  animation-play-state: paused;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+::-webkit-scrollbar-track {
+  background: var(--surface-2);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-muted);
+}
+
+/* ========================================================================= */
+/* THEME SYSTEM: DARK (DEFAULT) & LIGHT (EDITORIAL)                          */
+/* ========================================================================= */
+
+html.dark {
+  color-scheme: dark;
+}
+
+html.light {
+  color-scheme: light;
+  --brand: #0A0A0A;
+  --brand-mid: #262626;
+  --brand-deep: #FFFFFF;
+  --accent: #FF5500;
+  --accent-dark: #E04B00;
+  --accent-light: #FFF0E6;
+  --gold: #D97706;
+  --gold-light: #FEF3C7;
+  --ink: #0F172A;
+  --ink-secondary: #475569;
+  --ink-muted: #94A3B8;
+  --surface: #FFFFFF;
+  --surface-2: #F8F9FA;
+  --surface-3: #F1F3F5;
+  --border: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.16);
+}
+
+/* Smooth background and text transition across theme change */
+body, header, nav, main, footer {
+  transition: background-color 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+              color 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* --- LIGHT MODE THEME OVERRIDES --- */
+html.light body {
+  background-color: #F8F9FA !important;
+  color: #0F172A !important;
+}
+
+html.light .bg-\[\#050505\] {
+  background-color: #F8F9FA !important;
+  color: #0F172A !important;
+}
+
+/* Sticky Header */
+html.light header.bg-\[\#0A0A0A\]\/95 {
+  background-color: rgba(255, 255, 255, 0.94) !important;
+  border-bottom-color: rgba(0, 0, 0, 0.08) !important;
+  color: #0F172A !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04) !important;
+}
+
+/* Event Cards, Filter Bars & Surfaces */
+html.light .bg-\[\#0D0D10\] {
+  background-color: #FFFFFF !important;
+  border-color: rgba(0, 0, 0, 0.08) !important;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.04) !important;
+}
+
+html.light .bg-\[\#111114\] {
+  background-color: #F1F3F5 !important;
+  border-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+html.light .bg-\[\#0A0A0C\],
+html.light .bg-\[\#0a0a0c\] {
+  background-color: #FFFFFF !important;
+  border-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+html.light .bg-\[\#0A0C10\],
+html.light .bg-\[\#0a0c10\] {
+  background-color: #F8F9FA !important;
+  color: #0F172A !important;
+}
+
+html.light .bg-\[\#12151D\],
+html.light .bg-\[\#12151d\] {
+  background-color: #FFFFFF !important;
+  border-color: rgba(0, 0, 0, 0.08) !important;
+  color: #0F172A !important;
+}
+
+/* Badges overlaying dark images/posters must ALWAYS keep crisp white text and contrast */
+html.light [data-preserve-contrast="true"],
+html.light [data-preserve-contrast="true"] *,
+html.light .preserve-light-contrast,
+html.light .preserve-light-contrast * {
+  color: #FFFFFF !important;
+}
+
+html.light .border-white\/10 {
+  border-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+html.light .border-white\/15,
+html.light .border-white\/20 {
+  border-color: rgba(0, 0, 0, 0.14) !important;
+}
+
+/* Buttons, Chips, and Sub-elements in Light Mode */
+html.light .bg-white\/5:not(.vibe-instant-container *):not(.vibe-reel-card *):not(.dark-dialog *):not(.dark-canvas *):not(.flashcard-hero-overlay *):not(.event-card-cover *) {
+  background-color: rgba(0, 0, 0, 0.04) !important;
+}
+
+html.light .bg-white\/10:not(.vibe-instant-container *):not(.vibe-reel-card *):not(.dark-dialog *):not(.dark-canvas *):not(.flashcard-hero-overlay *):not(.event-card-cover *) {
+  background-color: rgba(0, 0, 0, 0.07) !important;
+}
+
+html.light .hover\:bg-white\/10:hover:not(.vibe-instant-container *):not(.vibe-reel-card *):not(.dark-dialog *):not(.dark-canvas *):not(.flashcard-hero-overlay *):not(.event-card-cover *) {
+  background-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+html.light .hover\:bg-white\/20:hover:not(.vibe-instant-container *):not(.vibe-reel-card *):not(.dark-dialog *):not(.dark-canvas *):not(.flashcard-hero-overlay *):not(.event-card-cover *) {
+  background-color: rgba(0, 0, 0, 0.12) !important;
+}
+
+html.light .hover\:bg-white\/5:hover:not(.vibe-instant-container *):not(.vibe-reel-card *):not(.dark-dialog *):not(.dark-canvas *):not(.flashcard-hero-overlay *):not(.event-card-cover *) {
+  background-color: rgba(0, 0, 0, 0.04) !important;
+}
+
+html.light .hover\:text-white:hover:not(button.bg-\[\#FF5500\] *):not(a.bg-\[\#FF5500\] *):not(.vibe-instant-container *):not(.vibe-reel-card *):not(.dark-dialog *):not(.dark-canvas *):not(.flashcard-hero-overlay *):not(.event-card-cover *):not(.pwa-install-banner *) {
+  color: #0F172A !important;
+}
+
+html.light .border-white\/10:not(.vibe-instant-container *):not(.vibe-reel-card *):not(.dark-dialog *):not(.dark-canvas *):not(.flashcard-hero-overlay *):not(.event-card-cover *) {
+  border-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+html.light .border-white\/15:not(.vibe-instant-container *):not(.vibe-reel-card *):not(.dark-dialog *):not(.dark-canvas *):not(.flashcard-hero-overlay *):not(.event-card-cover *),
+html.light .border-white\/20:not(.vibe-instant-container *):not(.vibe-reel-card *):not(.dark-dialog *):not(.dark-canvas *):not(.flashcard-hero-overlay *):not(.event-card-cover *) {
+  border-color: rgba(0, 0, 0, 0.14) !important;
+}
+
+/* Text Overrides for Light Mode (applied ONLY to regular light content) */
+html.light .text-white:not(button.bg-\[\#FF5500\]):not(a.bg-\[\#FF5500\]):not(button.bg-\[\#FF5500\] *):not(a.bg-\[\#FF5500\] *):not(.vibe-instant-container *):not(.vibe-reel-card *):not(.dark-dialog *):not(.dark-canvas *):not(.flashcard-hero-overlay *):not(.event-card-cover *):not(.event-cover-overlay *):not(.preview-card-cover *):not([class*="bg-black"]):not([class*="bg-black"] *):not([class*="bg-slate-9"]):not([class*="bg-slate-9"] *):not([class*="bg-slate-8"]):not([class*="bg-slate-8"] *):not([class*="bg-\[\#0F172A\]"]):not([class*="bg-\[\#0F172A\]"] *):not([class*="bg-neutral-9"]):not([class*="bg-neutral-9"] *):not([class*="bg-neutral-8"]):not([class*="bg-neutral-8"] *):not(.pointer-events-none *):not(.pwa-install-banner *) {
+  color: #0F172A !important;
+}
+
+html.light .text-white\/90:not(.vibe-instant-container *):not(.vibe-reel-card *):not(.dark-dialog *):not(.dark-canvas *):not(.flashcard-hero-overlay *):not(.event-card-cover *):not(.pwa-install-banner *) {
+  color: #0F172A !important;
+}
+
+html.light .text-white\/80:not(.vibe-instant-container *):not(.vibe-reel-card *):not(.dark-dialog *):not(.dark-canvas *):not(.flashcard-hero-overlay *):not(.event-card-cover *):not(.pwa-install-banner *) {
+  color: #1E293B !important;
+}
+
+html.light .text-white\/70:not(.vibe-instant-container *):not(.vibe-reel-card *):not(.dark-dialog *):not(.dark-canvas *):not(.flashcard-hero-overlay *):not(.event-card-cover *):not(.pwa-install-banner *),
+html.light .text-white\/60:not(.vibe-instant-container *):not(.vibe-reel-card *):not(.dark-dialog *):not(.dark-canvas *):not(.flashcard-hero-overlay *):not(.event-card-cover *):not(.pwa-install-banner *) {
+  color: #334155 !important;
+}
+
+html.light .text-white\/50:not(.vibe-instant-container *):not(.vibe-reel-card *):not(.dark-dialog *):not(.dark-canvas *):not(.flashcard-hero-overlay *):not(.event-card-cover *):not(.pwa-install-banner *) {
+  color: #475569 !important;
+}
+
+html.light .text-white\/40:not(.vibe-instant-container *):not(.vibe-reel-card *):not(.dark-dialog *):not(.dark-canvas *):not(.flashcard-hero-overlay *):not(.event-card-cover *):not(.pwa-install-banner *) {
+  color: #64748B !important;
+}
+
+/* =========================================================================
+   IMMERSIVE DARK SURFACES (Vibe Instant, Reels, Dark Modals, Hero Overlays)
+   Retain 100% crisp white text, glowing accents, and translucent dark styling
+   ========================================================================= */
+html.light .vibe-instant-container,
+html.light .vibe-reel-card,
+html.light .dark-dialog,
+html.light .dark-canvas {
+  color: #FFFFFF !important;
+}
+
+html.light .vibe-instant-container {
+  background-color: #08080A !important;
+}
+
+html.light .vibe-instant-container h1,
+html.light .vibe-instant-container h2,
+html.light .vibe-instant-container h3,
+html.light .vibe-instant-container h4,
+html.light .vibe-instant-container h5,
+html.light .vibe-instant-container h6,
+html.light .vibe-reel-card h1,
+html.light .vibe-reel-card h2,
+html.light .vibe-reel-card h3,
+html.light .vibe-reel-card h4,
+html.light .vibe-reel-card h5,
+html.light .vibe-reel-card h6,
+html.light .dark-dialog h1,
+html.light .dark-dialog h2,
+html.light .dark-dialog h3,
+html.light .dark-dialog h4,
+html.light .dark-dialog h5,
+html.light .dark-dialog h6 {
+  color: #FFFFFF !important;
+}
+
+html.light .vibe-instant-container .text-neutral-300,
+html.light .vibe-reel-card .text-neutral-300 {
+  color: #D4D4D8 !important;
+}
+
+html.light .vibe-instant-container .text-neutral-400,
+html.light .vibe-reel-card .text-neutral-400 {
+  color: #A1A1AA !important;
+}
+
+html.light .vibe-instant-container .text-neutral-500,
+html.light .vibe-reel-card .text-neutral-500 {
+  color: #71717A !important;
+}
+
+html.light .vibe-instant-container button[aria-label*="Switch to"],
+html.light .vibe-instant-container button[title*="Switch to"] {
+  background-color: rgba(255, 255, 255, 0.08) !important;
+  border-color: rgba(255, 255, 255, 0.15) !important;
+  color: #FFFFFF !important;
+}
+
+html.light .vibe-instant-container .text-white,
+html.light .vibe-reel-card .text-white,
+html.light .dark-dialog .text-white,
+html.light .dark-canvas .text-white {
+  color: #FFFFFF !important;
+}
+
+html.light .vibe-instant-container .text-white\/90,
+html.light .vibe-reel-card .text-white\/90,
+html.light .dark-dialog .text-white\/90,
+html.light .dark-canvas .text-white\/90 {
+  color: rgba(255, 255, 255, 0.9) !important;
+}
+
+html.light .vibe-instant-container .text-white\/80,
+html.light .vibe-reel-card .text-white\/80,
+html.light .dark-dialog .text-white\/80,
+html.light .dark-canvas .text-white\/80 {
+  color: rgba(255, 255, 255, 0.8) !important;
+}
+
+html.light .vibe-instant-container .text-white\/70,
+html.light .vibe-reel-card .text-white\/70,
+html.light .dark-dialog .text-white\/70,
+html.light .dark-canvas .text-white\/70 {
+  color: rgba(255, 255, 255, 0.7) !important;
+}
+
+html.light .vibe-instant-container .text-white\/60,
+html.light .vibe-reel-card .text-white\/60,
+html.light .dark-dialog .text-white\/60,
+html.light .dark-canvas .text-white\/60 {
+  color: rgba(255, 255, 255, 0.6) !important;
+}
+
+html.light .vibe-instant-container .text-white\/50,
+html.light .vibe-reel-card .text-white\/50,
+html.light .dark-dialog .text-white\/50,
+html.light .dark-canvas .text-white\/50 {
+  color: rgba(255, 255, 255, 0.5) !important;
+}
+
+html.light .vibe-instant-container .text-white\/40,
+html.light .vibe-reel-card .text-white\/40,
+html.light .dark-dialog .text-white\/40,
+html.light .dark-canvas .text-white\/40 {
+  color: rgba(255, 255, 255, 0.4) !important;
+}
+
+html.light .vibe-instant-container .text-white\/30,
+html.light .vibe-reel-card .text-white\/30,
+html.light .dark-dialog .text-white\/30,
+html.light .dark-canvas .text-white\/30 {
+  color: rgba(255, 255, 255, 0.3) !important;
+}
+
+html.light .vibe-instant-container .text-white\/20,
+html.light .vibe-reel-card .text-white\/20,
+html.light .dark-dialog .text-white\/20,
+html.light .dark-canvas .text-white\/20 {
+  color: rgba(255, 255, 255, 0.2) !important;
+}
+
+/* Backgrounds in Vibe Instant & Dark Dialogs */
+html.light .vibe-instant-container .bg-white\/5,
+html.light .vibe-reel-card .bg-white\/5,
+html.light .dark-dialog .bg-white\/5 {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+}
+
+html.light .vibe-instant-container .bg-white\/10,
+html.light .vibe-reel-card .bg-white\/10,
+html.light .dark-dialog .bg-white\/10 {
+  background-color: rgba(255, 255, 255, 0.10) !important;
+}
+
+html.light .vibe-instant-container .bg-white\/15,
+html.light .vibe-reel-card .bg-white\/15,
+html.light .dark-dialog .bg-white\/15 {
+  background-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+html.light .vibe-instant-container .bg-white\/20,
+html.light .vibe-reel-card .bg-white\/20,
+html.light .dark-dialog .bg-white\/20 {
+  background-color: rgba(255, 255, 255, 0.20) !important;
+}
+
+html.light .vibe-instant-container .bg-black\/40,
+html.light .vibe-reel-card .bg-black\/40,
+html.light .dark-dialog .bg-black\/40 {
+  background-color: rgba(0, 0, 0, 0.40) !important;
+}
+
+html.light .vibe-instant-container .bg-black\/50,
+html.light .vibe-reel-card .bg-black\/50,
+html.light .dark-dialog .bg-black\/50 {
+  background-color: rgba(0, 0, 0, 0.50) !important;
+}
+
+html.light .vibe-instant-container .bg-black\/60,
+html.light .vibe-reel-card .bg-black\/60,
+html.light .dark-dialog .bg-black\/60 {
+  background-color: rgba(0, 0, 0, 0.60) !important;
+}
+
+html.light .vibe-instant-container .bg-black\/70,
+html.light .vibe-reel-card .bg-black\/70,
+html.light .dark-dialog .bg-black\/70 {
+  background-color: rgba(0, 0, 0, 0.70) !important;
+}
+
+html.light .vibe-instant-container .bg-black\/80,
+html.light .vibe-reel-card .bg-black\/80,
+html.light .dark-dialog .bg-black\/80 {
+  background-color: rgba(0, 0, 0, 0.80) !important;
+}
+
+html.light .vibe-instant-container .bg-black\/90,
+html.light .vibe-reel-card .bg-black\/90,
+html.light .dark-dialog .bg-black\/90 {
+  background-color: rgba(0, 0, 0, 0.90) !important;
+}
+
+/* Borders in Vibe Instant & Dark Dialogs */
+html.light .vibe-instant-container .border-white\/5,
+html.light .vibe-reel-card .border-white\/5,
+html.light .dark-dialog .border-white\/5 {
+  border-color: rgba(255, 255, 255, 0.05) !important;
+}
+
+html.light .vibe-instant-container .border-white\/10,
+html.light .vibe-reel-card .border-white\/10,
+html.light .dark-dialog .border-white\/10 {
+  border-color: rgba(255, 255, 255, 0.10) !important;
+}
+
+html.light .vibe-instant-container .border-white\/15,
+html.light .vibe-reel-card .border-white\/15,
+html.light .dark-dialog .border-white\/15 {
+  border-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+html.light .vibe-instant-container .border-white\/20,
+html.light .vibe-reel-card .border-white\/20,
+html.light .dark-dialog .border-white\/20 {
+  border-color: rgba(255, 255, 255, 0.20) !important;
+}
+
+html.light .vibe-instant-container .border-white\/30,
+html.light .vibe-reel-card .border-white\/30,
+html.light .dark-dialog .border-white\/30 {
+  border-color: rgba(255, 255, 255, 0.30) !important;
+}
+
+/* Hovers in Vibe Instant */
+html.light .vibe-instant-container .hover\:bg-white\/10:hover,
+html.light .vibe-reel-card .hover\:bg-white\/10:hover {
+  background-color: rgba(255, 255, 255, 0.10) !important;
+}
+
+html.light .vibe-instant-container .hover\:bg-white\/20:hover,
+html.light .vibe-reel-card .hover\:bg-white\/20:hover {
+  background-color: rgba(255, 255, 255, 0.20) !important;
+}
+
+html.light .vibe-instant-container .hover\:text-white:hover,
+html.light .vibe-reel-card .hover\:text-white:hover,
+html.light .dark-dialog .hover\:text-white:hover {
+  color: #FFFFFF !important;
+}
+
+/* Universal Form Fields & Inputs in Light Mode */
+html.light input:not(.vibe-instant-container *):not(.dark-dialog *):not(.vibe-reel-card *),
+html.light select:not(.vibe-instant-container *):not(.dark-dialog *):not(.vibe-reel-card *),
+html.light textarea:not(.vibe-instant-container *):not(.dark-dialog *):not(.vibe-reel-card *) {
+  background-color: #FFFFFF !important;
+  border-color: #CBD5E1 !important;
+  color: #0F172A !important;
+}
+
+html.light input:not(.vibe-instant-container *):not(.dark-dialog *):not(.vibe-reel-card *)::placeholder,
+html.light textarea:not(.vibe-instant-container *):not(.dark-dialog *):not(.vibe-reel-card *)::placeholder {
+  color: #94A3B8 !important;
+  opacity: 1 !important;
+}
+
+html.light input:not(.vibe-instant-container *):not(.dark-dialog *):not(.vibe-reel-card *):focus,
+html.light select:not(.vibe-instant-container *):not(.dark-dialog *):not(.vibe-reel-card *):focus,
+html.light textarea:not(.vibe-instant-container *):not(.dark-dialog *):not(.vibe-reel-card *):focus {
+  border-color: #FF5500 !important;
+  box-shadow: 0 0 0 3px rgba(255, 85, 0, 0.15) !important;
+}
+
+/* Inputs & Form Elements in Vibe Instant & Dark Modals */
+html.light .vibe-instant-container input,
+html.light .vibe-instant-container textarea,
+html.light .vibe-instant-container select,
+html.light .vibe-reel-card textarea,
+html.light .dark-dialog input,
+html.light .dark-dialog textarea,
+html.light .dark-dialog select {
+  color: #FFFFFF !important;
+  border-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+html.light .vibe-instant-container input::placeholder,
+html.light .vibe-instant-container textarea::placeholder,
+html.light .dark-dialog input::placeholder,
+html.light .dark-dialog textarea::placeholder {
+  color: rgba(255, 255, 255, 0.35) !important;
+}
+
+/* SVG stroke/fill preservation */
+html.light .vibe-instant-container svg:not([class*="text-"]),
+html.light .vibe-reel-card svg:not([class*="text-"]),
+html.light .dark-dialog svg:not([class*="text-"]) {
+  stroke: currentColor;
+}
+
+/* Event Card Details & Surface Overrides in Light Mode */
+html.light .event-card-body,
+html.light .event-card-body h3,
+html.light .bg-\[\#0D0D10\] h3,
+html.light .bg-\[\#111114\] h3 {
+  color: #0F172A !important;
+}
+
+html.light .event-card-body .text-white\/50,
+html.light .event-card-body .text-white\/60,
+html.light .bg-\[\#0D0D10\] .text-white\/50,
+html.light .bg-\[\#0D0D10\] .text-white\/60 {
+  color: #475569 !important;
+}
+
+html.light .event-card-body .text-white,
+html.light .bg-\[\#0D0D10\] .text-white {
+  color: #0F172A !important;
+}
+
+html.light .event-card-body .text-white\/40,
+html.light .bg-\[\#0D0D10\] .text-white\/40 {
+  color: #64748B !important;
+}
+
+html.light .event-card-body .border-white\/10,
+html.light .bg-\[\#0D0D10\] .border-white\/10 {
+  border-color: #E2E8F0 !important;
+}
+
+/* Tag pills inside event cards in Light Mode */
+html.light .event-card-body button.bg-white\/5,
+html.light .event-card-body .bg-white\/5,
+html.light .bg-\[\#0D0D10\] button.bg-white\/5,
+html.light .bg-\[\#0D0D10\] .bg-white\/5 {
+  background-color: #F1F5F9 !important;
+  border-color: #E2E8F0 !important;
+  color: #334155 !important;
+}
+
+html.light .event-card-body button.bg-white\/5:hover,
+html.light .bg-\[\#0D0D10\] button.bg-white\/5:hover {
+  background-color: #E2E8F0 !important;
+  color: #0F172A !important;
+}
+
+/* Verified Pill in Light Mode */
+html.light .event-card-body .bg-emerald-500\/10,
+html.light .bg-\[\#0D0D10\] .bg-emerald-500\/10 {
+  background-color: #ECFDF5 !important;
+  border-color: #A7F3D0 !important;
+  color: #047857 !important;
+}
+
+/* Brand Logo Text */
+html.light .brand-logo-text {
+  color: #0F172A !important;
+}
+
+/* Keep High-Contrast Vibrant Elements Clean */
+html.light button.bg-\[\#FF5500\],
+html.light a.bg-\[\#FF5500\],
+html.light button.bg-\[\#FF5500\] *,
+html.light a.bg-\[\#FF5500\] *,
+html.light .shadow-\[0_0_25px_rgba\(255\,85\,0\,0\.45\)\] {
+  color: #FFFFFF !important;
+}
+
+/* Ensure Photo Overlays & Dark Hero Banners STAY Crisp White */
+html.light .event-card-cover,
+html.light .event-card-cover *,
+html.light .event-cover-overlay,
+html.light .event-cover-overlay *,
+html.light .flashcard-hero-overlay,
+html.light .flashcard-hero-overlay * {
+  color: #FFFFFF !important;
+}
+
+html.light .flashcard-hero-overlay .text-amber-300 {
+  color: #FCD34D !important;
+}
+
+html.light .event-card-cover .text-\[\#FF5500\],
+html.light .flashcard-hero-overlay .text-\[\#FF5500\] {
+  color: #FF5500 !important;
+}
+
+/* Search input on feed */
+html.light input[placeholder*="Search for a vibe"],
+html.light input[placeholder*="Search events"] {
+  background-color: #FFFFFF !important;
+  border-color: rgba(0, 0, 0, 0.12) !important;
+  color: #0F172A !important;
+}
+html.light input[placeholder*="Search for a vibe"]::placeholder,
+html.light input[placeholder*="Search events"]::placeholder {
+  color: #94A3B8 !important;
+}
+
+/* Mobile Bottom Nav Bar Bright Mode (Light Mode) Styling */
+html.light nav[aria-label="Mobile Web App Navigation"],
+html.light .vibe-instant-container nav[aria-label="Mobile Web App Navigation"] {
+  background-color: rgba(255, 255, 255, 0.96) !important;
+  border-top: 1px solid rgba(0, 0, 0, 0.08) !important;
+  color: #0F172A !important;
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.06) !important;
+}
+
+html.light nav[aria-label="Mobile Web App Navigation"] a,
+html.light .vibe-instant-container nav[aria-label="Mobile Web App Navigation"] a {
+  color: #64748B !important;
+}
+
+html.light nav[aria-label="Mobile Web App Navigation"] a:hover,
+html.light .vibe-instant-container nav[aria-label="Mobile Web App Navigation"] a:hover {
+  color: #0F172A !important;
+}
+
+html.light nav[aria-label="Mobile Web App Navigation"] a.nav-active,
+html.light nav[aria-label="Mobile Web App Navigation"] a[class*="text-[#FF5500]"],
+html.light .vibe-instant-container nav[aria-label="Mobile Web App Navigation"] a.nav-active,
+html.light .vibe-instant-container nav[aria-label="Mobile Web App Navigation"] a[class*="text-[#FF5500]"] {
+  color: #FF5500 !important;
+}
+
+html.light nav[aria-label="Mobile Web App Navigation"] .mobile-nav-label,
+html.light .vibe-instant-container nav[aria-label="Mobile Web App Navigation"] .mobile-nav-label {
+  color: #64748B !important;
+}
+
+html.light nav[aria-label="Mobile Web App Navigation"] a.nav-active .mobile-nav-label,
+html.light nav[aria-label="Mobile Web App Navigation"] a[class*="text-[#FF5500]"] .mobile-nav-label,
+html.light .vibe-instant-container nav[aria-label="Mobile Web App Navigation"] a.nav-active .mobile-nav-label,
+html.light .vibe-instant-container nav[aria-label="Mobile Web App Navigation"] a[class*="text-[#FF5500]"] .mobile-nav-label {
+  color: #FF5500 !important;
+}
+
+html.light nav[aria-label="Mobile Web App Navigation"] .center-host-label,
+html.light .vibe-instant-container nav[aria-label="Mobile Web App Navigation"] .center-host-label {
+  color: #0F172A !important;
+}
+
+html.light nav[aria-label="Mobile Web App Navigation"] .center-host-ring,
+html.light .vibe-instant-container nav[aria-label="Mobile Web App Navigation"] .center-host-ring {
+  border-color: #FFFFFF !important;
+}
+
+/* Footer in Light Mode */
+html.light footer.bg-\[\#050505\] {
+  background-color: #F1F3F5 !important;
+  border-top-color: rgba(0, 0, 0, 0.08) !important;
+  color: #64748B !important;
+}
+
+/* --- STUDIO WORKSPACE DARK MODE THEMING --- */
+html:not(.light) .studio-workspace-container h1,
+html:not(.light) .studio-workspace-container h2,
+html:not(.light) .studio-workspace-container h3 {
+  color: #FFFFFF !important;
+}
+
+html:not(.light) .studio-workspace-container p,
+html:not(.light) .studio-workspace-container label {
+  color: rgba(255, 255, 255, 0.7) !important;
+}
+
+html:not(.light) .studio-workspace-container .bg-white {
+  background-color: #0D0D10 !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  color: #F3F4F6 !important;
+}
+
+html:not(.light) .studio-workspace-container .bg-\[\#F8FAFC\],
+html:not(.light) .studio-workspace-container .bg-\[\#FAF8F5\],
+html:not(.light) .studio-workspace-container .bg-\[\#F1F5F9\],
+html:not(.light) .studio-workspace-container .bg-slate-50,
+html:not(.light) .studio-workspace-container .bg-slate-100,
+html:not(.light) .studio-workspace-container .bg-slate-200 {
+  background-color: rgba(255, 255, 255, 0.08) !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  color: rgba(255, 255, 255, 0.8) !important;
+}
+
+html:not(.light) .studio-workspace-container .bg-slate-50:hover,
+html:not(.light) .studio-workspace-container .bg-slate-100:hover,
+html:not(.light) .studio-workspace-container .bg-slate-200:hover {
+  background-color: rgba(255, 255, 255, 0.15) !important;
+  color: #FFFFFF !important;
+}
+
+html:not(.light) .studio-workspace-container .border-slate-200,
+html:not(.light) .studio-workspace-container .border-slate-300,
+html:not(.light) .studio-workspace-container .border-\[\#CBD5E1\],
+html:not(.light) .studio-workspace-container .border-\[\#F1F5F9\],
+html:not(.light) .studio-workspace-container .border-\[\#E2E8F0\] {
+  border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+html:not(.light) .studio-workspace-container input,
+html:not(.light) .studio-workspace-container textarea,
+html:not(.light) .studio-workspace-container select {
+  background-color: #111114 !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  color: #FFFFFF !important;
+}
+
+html:not(.light) .studio-workspace-container input::placeholder,
+html:not(.light) .studio-workspace-container textarea::placeholder {
+  color: rgba(255, 255, 255, 0.35) !important;
+}
+
+html:not(.light) .studio-workspace-container .border-\[\#E2E8F0\] {
+  border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+html:not(.light) .studio-workspace-container .text-\[\#0F172A\],
+html:not(.light) .studio-workspace-container .text-\[\#0A0A0A\] {
+  color: #FFFFFF !important;
+}
+
+html:not(.light) .studio-workspace-container .text-\[\#64748B\],
+html:not(.light) .studio-workspace-container .text-\[\#475569\] {
+  color: rgba(255, 255, 255, 0.6) !important;
+}
+
+html:not(.light) .studio-workspace-container .fixed.bottom-0 {
+  background-color: rgba(13, 13, 16, 0.95) !important;
+  border-top-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+html:not(.light) .studio-workspace-container button[class*="bg-\[\#E8621A\]"],
+html:not(.light) .studio-workspace-container button[class*="bg-\[\#FF5500\]"] {
+  background-color: #FF5500 !important;
+  color: #FFFFFF !important;
+  border-color: #FF5500 !important;
+}
+
+html:not(.light) .studio-workspace-container .bg-orange-50 {
+  background-color: rgba(255, 85, 0, 0.15) !important;
+  border-color: rgba(255, 85, 0, 0.3) !important;
+  color: #FF7733 !important;
+}
+
+/* ========================================================================= */
+/* VIBE SPLASH SCREEN                                                        */
+/* ========================================================================= */
+@media (prefers-reduced-motion: reduce) {
+  .splash,
+  .splash * {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.splash {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  display: grid;
+  place-items: center;
+  background: var(--background, #050505);
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.splash-glow {
+  position: absolute;
+  width: 560px;
+  height: 560px;
+  border-radius: 50%;
+  background: radial-gradient(circle, oklch(.727 .189 43 / .15), transparent 65%);
+  animation: splash-glow 2s ease-in-out infinite;
+}
+
+.splash-inner {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  z-index: 2;
+}
+
+.splash-word {
+  font-family: var(--font-inter, system-ui, -apple-system, sans-serif);
+  font-weight: 900;
+  font-size: 76px;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  color: #FFFFFF;
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: center;
+  animation: splash-rise .7s cubic-bezier(.22,1,.36,1) both;
+}
+
+.splash-dot {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background-color: #FF5500;
+  box-shadow: 0 0 22px rgba(255, 85, 0, 0.95);
+  transform: translateY(-2px);
+}
+
+.splash-by {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  color: rgba(255, 255, 255, 0.55);
+  text-transform: uppercase;
+  margin-top: 14px;
+  animation: splash-rise .7s .15s cubic-bezier(.22,1,.36,1) both;
+}
+
+.splash-tagline {
+  color: var(--muted-foreground, #9CA3AF);
+  font-size: 13px;
+  margin: 26px 0 0;
+  animation: splash-rise .7s .35s cubic-bezier(.22,1,.36,1) both;
+}
+
+.splash-bar {
+  width: 150px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--secondary, rgba(255, 255, 255, 0.15));
+  overflow: hidden;
+  margin-top: 22px;
+}
+
+.splash-bar i {
+  display: block;
+  height: 100%;
+  width: 100%;
+  background: var(--primary, #FF5500);
+  transform-origin: left;
+  animation: splash-fill 1.5s .2s ease-in-out both;
+}
+
+.splash-skip {
+  position: absolute;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: none;
+  border: 0;
+  color: var(--muted-foreground, #9CA3AF);
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  animation: splash-rise .7s .6s cubic-bezier(.22,1,.36,1) both;
+}
+
+.splash-exit {
+  opacity: 0;
+  transform: scale(1.05);
+  transition: opacity .5s ease, transform .5s ease;
+  pointer-events: none;
+}
+
+@keyframes splash-rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes splash-fill {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@keyframes splash-glow {
+  0%, 100% { opacity: .6; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.08); }
+}
+
+@media (max-width: 480px) {
+  .splash-word { font-size: 56px; }
+  .splash-dot { width: 11px; height: 11px; margin-left: 4px; }
+  .splash-by { font-size: 9px; }
+  .splash-tagline { font-size: 12px; }
+}
+
+/* ========================================================================= */
+/* SHORTS / REELS NATIVE CSS SCROLL SNAPPING (Instagram / YouTube Standard)   */
+/* ========================================================================= */
+.reels-container {
+  width: 100%;
+  height: 100%;
+  overflow-y: scroll;
+  scroll-snap-type: y mandatory;
+  scroll-behavior: smooth;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.reels-container::-webkit-scrollbar {
+  display: none;
+}
+
+.reel-slide {
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  max-height: 100%;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  position: relative;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+

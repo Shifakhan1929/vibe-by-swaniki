@@ -1,0 +1,499 @@
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import Image from 'next/image';
+import Link from 'next/link';
+import {
+  Calendar,
+  Clock,
+  MapPin,
+  Share2,
+  CheckCircle2,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUpRight,
+  Ticket,
+  Lock,
+  SlidersHorizontal,
+  Users,
+} from 'lucide-react';
+import { EventItem, RSVPItem, EventAnnouncement } from '@/types';
+import { getRSVPsByEvent, getAnnouncements, subscribeToStore, isFlashVibeEvent } from '@/lib/store';
+import { getLocalAuthSession, useAuth } from '@/lib/auth';
+import RSVPForm from '@/components/ui/RSVPForm';
+import ShareEventModal from '@/components/events/ShareEventModal';
+import AnnouncementBanner from '@/components/communication/AnnouncementBanner';
+
+function ResponsiveEventPoster({ src, title }: { src?: string; title: string }) {
+  const [currentSrc, setCurrentSrc] = useState(src);
+  const [triedProxy, setTriedProxy] = useState(false);
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    setCurrentSrc(src);
+    setTriedProxy(false);
+    setHasError(false);
+  }, [src]);
+
+  if (!currentSrc || hasError) {
+    return (
+      <div className="flex items-center justify-center h-full bg-[#111114] text-white/50 text-xs">
+        No poster available
+      </div>
+    );
+  }
+
+  const handleError = () => {
+    if (!triedProxy && currentSrc && !currentSrc.startsWith('/api/image-proxy') && !currentSrc.startsWith('data:')) {
+      setTriedProxy(true);
+      setCurrentSrc(`/api/image-proxy?url=${encodeURIComponent(currentSrc)}`);
+    } else {
+      setHasError(true);
+    }
+  };
+
+  return (
+    <div className="relative w-full h-full flex items-center justify-center overflow-hidden bg-[#0A0A0A]">
+      {/* Ambient Blurred Backdrop */}
+      <img
+        src={currentSrc}
+        alt=""
+        aria-hidden="true"
+        referrerPolicy="no-referrer"
+        crossOrigin="anonymous"
+        className="absolute inset-0 w-full h-full object-cover scale-110 blur-2xl opacity-45 brightness-75 select-none pointer-events-none"
+      />
+      {/* Crystal Clear Poster fitting any aspect ratio without cropping */}
+      <img
+        src={currentSrc}
+        alt={title}
+        referrerPolicy="no-referrer"
+        crossOrigin="anonymous"
+        onError={handleError}
+        className="relative max-h-full max-w-full object-contain z-10 drop-shadow-xl"
+      />
+    </div>
+  );
+}
+
+function formatWhenDate(dateStr?: string) {
+  if (!dateStr) {
+    return {
+      dateText: 'THU, 15 OCT · 7:00 PM',
+      tzText: 'India Standard Time',
+    };
+  }
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) {
+      return {
+        dateText: dateStr,
+        tzText: 'India Standard Time',
+      };
+    }
+    const weekday = d.toLocaleDateString('en-IN', { weekday: 'short', timeZone: 'Asia/Kolkata' }).toUpperCase();
+    const day = d.toLocaleDateString('en-IN', { day: 'numeric', timeZone: 'Asia/Kolkata' });
+    const month = d.toLocaleDateString('en-IN', { month: 'short', timeZone: 'Asia/Kolkata' }).toUpperCase();
+    const time = d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }).toUpperCase();
+    return {
+      dateText: `${weekday}, ${day} ${month} · ${time}`,
+      tzText: 'India Standard Time',
+    };
+  } catch {
+    return {
+      dateText: 'THU, 15 OCT · 7:00 PM',
+      tzText: 'India Standard Time',
+    };
+  }
+}
+
+export default function UnifiedEventDetailView({ event }: { event: EventItem }) {
+  const { user, profile } = useAuth();
+  const [showRsvpModal, setShowRsvpModal] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [confirmedRsvp, setConfirmedRsvp] = useState<RSVPItem | null>(null);
+  const [announcements, setAnnouncements] = useState<EventAnnouncement[]>([]);
+
+  const isExternal = Boolean(
+    event.source_type === 'external' || event.is_external || event.external_ticket_url
+  );
+  const isBotEvent = isFlashVibeEvent(event);
+  const rawTicketUrl = event.external_ticket_url?.trim();
+  const normalizedTicketUrl = rawTicketUrl
+    ? rawTicketUrl.startsWith('http://') || rawTicketUrl.startsWith('https://')
+      ? rawTicketUrl
+      : `https://${rawTicketUrl}`
+    : '';
+
+  const rawPlatform = (event.source_platform || '').toLowerCase().trim();
+  let displayPlatform = 'Official Ticketing Partner';
+  if (rawPlatform === 'district') displayPlatform = 'District';
+  else if (rawPlatform === 'bookmyshow') displayPlatform = 'BookMyShow';
+  else if (rawPlatform === 'insider' || rawPlatform === 'paytm') displayPlatform = 'Paytm Insider';
+  else if (rawPlatform === 'unstop') displayPlatform = 'Unstop';
+  else if (rawPlatform === 'luma') displayPlatform = 'Luma';
+  else if (rawPlatform) displayPlatform = rawPlatform.charAt(0).toUpperCase() + rawPlatform.slice(1);
+
+  const { dateText, tzText } = formatWhenDate(event.start_at);
+
+  const cityName = event.city || 'Mumbai';
+  const categoryName = (event as any).category || 'Music';
+  const venueTitle = event.location_name || `${cityName}`;
+  const mapQuery = encodeURIComponent(`${event.location_name || ''} ${event.city || ''}`);
+  const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${mapQuery}`;
+
+  const rawTitle = (event.title || 'Event Details').trim();
+  const cleanTitle = rawTitle.endsWith('.') ? rawTitle.slice(0, -1) : rawTitle;
+
+  const isPrivate = event.is_public === false || String(event.is_public) === 'false';
+
+  // Check if current attendee already has a confirmed RSVP for this event
+  useEffect(() => {
+    if (isExternal) return;
+    const session = getLocalAuthSession();
+    const userEmail = (session?.email || user?.email || profile?.email || '').toLowerCase().trim();
+    if (userEmail) {
+      const allRsvps = getRSVPsByEvent(event.id);
+      const match = allRsvps.find((r) => (r.email || '').toLowerCase().trim() === userEmail);
+      if (match) {
+        setConfirmedRsvp(match);
+      }
+    }
+  }, [event.id, isExternal, user?.email, profile?.email]);
+
+  useEffect(() => {
+    setAnnouncements(getAnnouncements(event.id));
+    const unsub = subscribeToStore(() => {
+      setAnnouncements(getAnnouncements(event.id));
+    });
+    return () => unsub();
+  }, [event.id]);
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4 pb-16 w-full font-sans text-white">
+      {/* Top Utility Bar */}
+      <div className="flex items-center justify-between mb-4 sm:mb-6 pb-3 sm:pb-4 border-b border-white/10">
+        <Link
+          href="/discover"
+          className="inline-flex items-center gap-1.5 text-xs font-semibold text-white/60 hover:text-white transition-colors"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" />
+          <span>Back to discover</span>
+        </Link>
+
+        <button
+          onClick={() => setShowShareModal(true)}
+          className="inline-flex items-center gap-1.5 text-xs font-semibold text-white/70 hover:text-white transition-colors cursor-pointer"
+        >
+          <Share2 className="w-3.5 h-3.5" />
+          <span>Share event</span>
+        </button>
+      </div>
+
+      {/* Host Announcements Banner */}
+      {announcements.length > 0 && (
+        <AnnouncementBanner
+          announcements={announcements}
+          brandColor={event.organizer_brand_color}
+        />
+      )}
+
+      {/* Main 2-Column Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-10">
+        {/* Left Column: Details (7 cols) */}
+        <div className="lg:col-span-7 space-y-6">
+          {/* Cover Poster */}
+          <div className="relative aspect-[16/9] w-full rounded-2xl overflow-hidden bg-[#0D0D10] border border-white/10 shadow-lg">
+            <ResponsiveEventPoster src={event.cover_image_url} title={event.title} />
+
+            {/* Badges Overlay */}
+            <div className="absolute top-3.5 left-3.5 right-3.5 flex items-center justify-between pointer-events-none z-20">
+              <span
+                data-preserve-contrast="true"
+                className="preserve-light-contrast px-3 py-1 rounded-full bg-black/75 backdrop-blur-md text-[11px] font-semibold !text-white shadow-sm flex items-center gap-1.5 border border-white/20"
+              >
+                {isPrivate ? (
+                  <>
+                    <Lock className="w-3 h-3 text-amber-400" />
+                    <span className="!text-white">Private</span>
+                  </>
+                ) : (
+                  <>
+                    <SlidersHorizontal className="w-3 h-3 !text-white" />
+                    <span className="!text-white">{categoryName}</span>
+                  </>
+                )}
+              </span>
+
+              {isExternal ? (
+                <span
+                  data-preserve-contrast="true"
+                  className="preserve-light-contrast px-3 py-1 rounded-full bg-black/80 backdrop-blur-md text-[11px] font-bold !text-white shadow-sm border border-white/20 flex items-center gap-1.5"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#FF5500]" />
+                  <span className="!text-white">via {displayPlatform}</span>
+                </span>
+              ) : (
+                <span
+                  data-preserve-contrast="true"
+                  className="preserve-light-contrast px-3 py-1 rounded-full bg-black/75 backdrop-blur-md text-[11px] font-semibold !text-white shadow-sm border border-white/20"
+                >
+                  Selling fast
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Event Header Information */}
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2 text-xs text-white/50 font-medium tracking-wide">
+              <span>{categoryName} · {cityName}</span>
+              {isExternal && (
+                <>
+                  <span>•</span>
+                  <span className="text-[#FF5500] font-semibold">Official Partner: {displayPlatform}</span>
+                </>
+              )}
+            </div>
+
+            {/* Title with styled period */}
+            <h1 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-white tracking-tight leading-tight">
+              {cleanTitle}
+              <span className="text-[#FF5500]">.</span>
+            </h1>
+
+            {/* Tagline */}
+            {event.tagline && (
+              <p className="text-sm font-normal text-white/60 leading-relaxed pt-0.5">
+                {event.tagline}
+              </p>
+            )}
+          </div>
+
+          {/* Schedule & Location Blocks */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+            {/* Date / Time Card */}
+            <div className="p-4 rounded-2xl bg-[#0D0D10] border border-white/10 flex items-start gap-3.5 shadow-xs">
+              <div className="w-10 h-10 rounded-xl bg-orange-500/10 dark:bg-[#23150F] border border-[#FF5500]/20 flex items-center justify-center shrink-0">
+                <Calendar className="w-4 h-4 text-[#FF5500]" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-white/40">WHEN</div>
+                <div className="text-xs sm:text-sm font-bold text-white mt-0.5">{dateText}</div>
+                <div className="text-[11px] text-white/40 mt-0.5">{tzText}</div>
+              </div>
+            </div>
+
+            {/* Location Card */}
+            <div className="p-4 rounded-2xl bg-[#0D0D10] border border-white/10 flex items-start gap-3.5 shadow-xs">
+              <div className="w-10 h-10 rounded-xl bg-orange-500/10 dark:bg-[#23150F] border border-[#FF5500]/20 flex items-center justify-center shrink-0">
+                <MapPin className="w-4 h-4 text-[#FF5500]" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-white/40">WHERE</div>
+                <div className="text-xs sm:text-sm font-bold text-white truncate mt-0.5">
+                  {venueTitle}
+                </div>
+                {event.event_type !== 'online' && (
+                  <a
+                    href={mapsUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-[11px] font-medium text-[#FF5500] hover:underline mt-0.5 cursor-pointer"
+                  >
+                    <span>View on map</span>
+                    <span className="text-xs">↗</span>
+                  </a>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Description Section */}
+          <div className="pt-2 space-y-2.5">
+            <h2 className="text-base sm:text-lg font-bold text-white">About this Event</h2>
+            <div className="text-xs sm:text-sm text-white/70 leading-relaxed font-normal whitespace-pre-line">
+              {event.description || 'Details for this experience will be updated soon.'}
+            </div>
+          </div>
+
+          {/* Before You Arrive Checklist (Clean without host fluff) */}
+          <div className="border-t border-white/10 pt-5 space-y-3">
+            <h2 className="text-base sm:text-lg font-bold text-white">Before you arrive</h2>
+            <div className="space-y-2.5">
+              <div className="flex items-center gap-3 text-xs sm:text-sm text-white/70">
+                <Clock className="w-4 h-4 text-[#FF5500] shrink-0" />
+                <span>Doors open 30 minutes before the scheduled time.</span>
+              </div>
+              <div className="flex items-center gap-3 text-xs sm:text-sm text-white/70">
+                <Ticket className="w-4 h-4 text-[#FF5500] shrink-0" />
+                <span>
+                  {isExternal
+                    ? `Keep your ${displayPlatform} ticket confirmation handy at the venue.`
+                    : 'Keep your digital guest pass handy at the entrance.'}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Column: Sticky Booking Card (5 cols) */}
+        <div className="lg:col-span-5">
+          <div className="bg-[#0D0D10] rounded-2xl sm:rounded-3xl p-6 sm:p-7 border border-white/10 shadow-2xl sticky top-24 space-y-5">
+            {/* Top Status */}
+            <div className="flex items-center justify-between">
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-500/20 text-emerald-700 dark:text-emerald-400 text-xs font-semibold">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 animate-pulse" />
+                <span>{isExternal ? 'Official Ticketing' : 'Spots available'}</span>
+              </div>
+              <Ticket className="w-4 h-4 text-neutral-400 dark:text-white/40" />
+            </div>
+
+            {/* Header */}
+            <div>
+              <h3 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
+                {isExternal ? 'Book your spot' : 'Your spot is waiting.'}
+              </h3>
+              <p className="text-xs sm:text-sm text-white/50 mt-1">
+                {isExternal
+                  ? `Tickets are officially managed on ${displayPlatform}.`
+                  : 'Make a plan worth showing up for.'}
+              </p>
+            </div>
+
+            {/* Pricing */}
+            <div>
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-3xl font-black text-white font-sans">
+                  {event.external_price_text || (isExternal ? 'Official Tickets' : '₹499')}
+                </span>
+                {!isExternal && !isBotEvent && (
+                  <span className="text-xs text-white/50 font-normal">per person</span>
+                )}
+              </div>
+              <div className="text-xs text-white/50 mt-1">
+                {isExternal ? `Fulfilled directly on ${displayPlatform}` : 'Instant RSVP Confirmation'}
+              </div>
+            </div>
+
+            {/* CTA Button */}
+            {isExternal && normalizedTicketUrl ? (
+              <div className="space-y-2">
+                <a
+                  href={normalizedTicketUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full py-3.5 px-5 rounded-xl bg-gradient-to-r from-[#FF5500] to-[#E8621A] hover:brightness-110 text-white font-bold text-xs sm:text-sm transition shadow-lg shadow-[#FF5500]/25 flex items-center justify-center gap-2 cursor-pointer group"
+                >
+                  <Ticket className="w-4 h-4" />
+                  <span>Book Tickets on {displayPlatform}</span>
+                  <ArrowUpRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                </a>
+                <p className="text-[11px] text-white/40 text-center">
+                  Redirects securely to the official event page on {displayPlatform}
+                </p>
+              </div>
+            ) : confirmedRsvp ? (
+              <button
+                onClick={() => setShowRsvpModal(true)}
+                className="w-full py-3.5 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs sm:text-sm transition shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                <span>View Your Confirmed Pass & QR</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            ) : (
+              <button
+                onClick={() => setShowRsvpModal(true)}
+                className="w-full py-3.5 px-5 rounded-xl bg-gradient-to-r from-[#FF5500] to-[#E8621A] hover:brightness-110 text-white font-bold text-xs sm:text-sm transition shadow-lg shadow-[#FF5500]/25 flex items-center justify-center gap-2 cursor-pointer group"
+              >
+                <Ticket className="w-4 h-4" />
+                <span>Reserve your spot</span>
+                <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
+              </button>
+            )}
+
+            <div className="border-t border-white/10" />
+
+            {/* Secondary Action: Clean Share Button */}
+            <div>
+              <button
+                onClick={() => setShowShareModal(true)}
+                className="w-full py-2.5 px-4 rounded-xl border border-black/10 dark:border-white/10 bg-neutral-100 hover:bg-neutral-200 dark:bg-[#111114] dark:hover:bg-white/10 text-xs font-semibold text-neutral-800 dark:text-white transition flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Share2 className="w-3.5 h-3.5 text-[#FF5500]" />
+                <span>Invite friends</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Clean RSVP Modal for Native Events */}
+      {!isExternal && !isBotEvent && showRsvpModal && (
+        <div 
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowRsvpModal(false);
+          }}
+        >
+          <div className="relative w-full max-w-md bg-[#0D0D10] rounded-3xl border border-white/15 p-6 sm:p-7 shadow-2xl max-h-[92vh] overflow-y-auto text-white">
+            <button
+              onClick={() => setShowRsvpModal(false)}
+              className="absolute top-4 right-4 text-white/60 hover:text-white w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center transition-colors text-sm font-bold z-10 cursor-pointer"
+              aria-label="Close modal"
+            >
+              ✕
+            </button>
+            <RSVPForm
+              event={event}
+              cardClass="border-0 shadow-none p-0 bg-transparent text-white"
+              onSuccess={(rsvp) => {
+                setConfirmedRsvp(rsvp);
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Share Modal */}
+      <ShareEventModal
+        isOpen={showShareModal}
+        onClose={() => setShowShareModal(false)}
+        event={event}
+      />
+
+      {/* Sticky Mobile Booking Bottom Bar */}
+      <div className="fixed bottom-0 left-0 right-0 p-3 bg-[#09090B]/95 backdrop-blur-xl border-t border-white/10 z-40 lg:hidden flex items-center justify-between gap-3 shadow-2xl">
+        <div className="min-w-0">
+          <div className="text-base sm:text-lg font-black text-white truncate">
+            {event.external_price_text || (isExternal ? 'Official Passes' : '₹499')}
+          </div>
+          <div className="text-[10px] text-white/50 truncate">
+            {isExternal ? `via ${displayPlatform}` : 'Instant Confirmation'}
+          </div>
+        </div>
+
+        {isExternal && normalizedTicketUrl ? (
+          <a
+            href={normalizedTicketUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-5 py-3 rounded-xl bg-gradient-to-r from-[#FF5500] to-[#E8621A] text-white font-bold text-xs sm:text-sm shadow-lg shadow-[#FF5500]/25 flex items-center gap-1.5 shrink-0"
+          >
+            <span>Book Tickets</span>
+            <ArrowUpRight className="w-3.5 h-3.5" />
+          </a>
+        ) : (
+          <button
+            onClick={() => setShowRsvpModal(true)}
+            className="px-5 py-3 rounded-xl bg-gradient-to-r from-[#FF5500] to-[#E8621A] text-white font-bold text-xs sm:text-sm shadow-lg shadow-[#FF5500]/25 flex items-center gap-1.5 shrink-0"
+          >
+            <span>Reserve spot</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}

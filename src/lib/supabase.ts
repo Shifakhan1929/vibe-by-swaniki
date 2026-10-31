@@ -1,0 +1,219 @@
+import { createBrowserClient } from '@supabase/ssr';
+import { SupabaseClient } from '@supabase/supabase-js';
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+export const isSupabaseConfigured = (): boolean => {
+  return !!(supabaseUrl && supabaseAnonKey && !supabaseUrl.includes('your-project'));
+};
+
+let browserClient: SupabaseClient | null = null;
+
+/**
+ * Returns a singleton Supabase browser client with automatic cookie management for Next.js
+ */
+export const getSupabaseClient = (): SupabaseClient | null => {
+  if (typeof window === 'undefined') return null;
+  if (!isSupabaseConfigured()) return null;
+
+  if (!browserClient && supabaseUrl && supabaseAnonKey) {
+    browserClient = createBrowserClient(supabaseUrl, supabaseAnonKey, {
+      realtime: {
+        params: {
+          eventsPerSecond: 10,
+        },
+      },
+    });
+  }
+  return browserClient;
+};
+
+/**
+ * Realtime subscription to live RSVPs and Comments for a specific event
+ */
+export const subscribeToEventRealtime = (
+  eventId: string,
+  onRsvpChange: (payload: any) => void
+) => {
+  const client = getSupabaseClient();
+  if (!client) return () => {};
+
+  const channel = client
+    .channel(`event-rsvps-${eventId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'rsvps',
+        filter: `event_id=eq.${eventId}`,
+      },
+      (payload) => {
+        onRsvpChange(payload);
+      }
+    )
+    .subscribe();
+
+  return () => {
+    client.removeChannel(channel);
+  };
+};
+
+/**
+ * Upload cover image to Supabase Storage (bucket: 'event-covers')
+ */
+export const uploadCoverImage = async (file: File): Promise<string | null> => {
+  const client = getSupabaseClient();
+  if (!client) return null;
+
+  try {
+    const fileExt = file.name.split('.').pop();
+    const fileName = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}.${fileExt}`;
+    const filePath = `covers/${fileName}`;
+
+    const { error: uploadError } = await client.storage
+      .from('event-covers')
+      .upload(filePath, file, {
+        cacheControl: '3600',
+        upsert: false,
+      });
+
+    if (uploadError) {
+      console.error('Supabase storage upload error:', uploadError);
+      return null;
+    }
+
+    const { data } = client.storage.from('event-covers').getPublicUrl(filePath);
+    return data.publicUrl;
+  } catch (err) {
+    console.error('Failed to upload image to Supabase:', err);
+    return null;
+  }
+};
+
+/**
+ * Upload avatar image to Supabase Storage (bucket: 'event-covers', path: 'avatars/...')
+ * Prevents base64 strings in cookies which causes 494 REQUEST_HEADER_TOO_LARGE.
+ */
+export const uploadAvatarImage = async (fileOrBlob: File | Blob): Promise<string | null> => {
+  const client = getSupabaseClient();
+  if (!client) return null;
+
+  try {
+    const fileName = `avatars/${Date.now()}-${Math.random().toString(36).substring(2, 9)}.jpg`;
+
+    const { error: uploadError } = await client.storage
+      .from('event-covers')
+      .upload(fileName, fileOrBlob, {
+        contentType: 'image/jpeg',
+        cacheControl: '31536000',
+        upsert: true,
+      });
+
+    if (uploadError) {
+      console.warn('Supabase avatar storage upload notice:', uploadError.message);
+      return null;
+    }
+
+    const { data } = client.storage.from('event-covers').getPublicUrl(fileName);
+    return data.publicUrl;
+  } catch (err) {
+    console.warn('Failed to upload avatar to Supabase:', err);
+    return null;
+  }
+};
+
+/**
+ * Realtime subscription to live Host Announcements for a specific event
+ */
+export const subscribeToAnnouncementsRealtime = (
+  eventId: string,
+  onAnnouncementChange: (payload: any) => void
+) => {
+  const client = getSupabaseClient();
+  if (!client) return () => {};
+
+  const channel = client
+    .channel(`event-announcements-${eventId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'event_announcements',
+        filter: `event_id=eq.${eventId}`,
+      },
+      (payload) => {
+        onAnnouncementChange(payload);
+      }
+    )
+    .subscribe();
+
+  return () => {
+    client.removeChannel(channel);
+  };
+};
+
+/**
+ * Realtime subscription to live Messages for an event or recipient
+ */
+export const subscribeToMessagesRealtime = (
+  eventId: string,
+  onMessageChange: (payload: any) => void
+) => {
+  const client = getSupabaseClient();
+  if (!client) return () => {};
+
+  const channel = client
+    .channel(`event-messages-${eventId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'event_messages',
+        filter: `event_id=eq.${eventId}`,
+      },
+      (payload) => {
+        onMessageChange(payload);
+      }
+    )
+    .subscribe();
+
+  return () => {
+    client.removeChannel(channel);
+  };
+};
+
+/**
+ * Realtime subscription to live conversation messages
+ */
+export const subscribeToConversationRealtime = (
+  conversationId: string,
+  onMessageChange: (payload: any) => void
+) => {
+  const client = getSupabaseClient();
+  if (!client) return () => {};
+
+  const channel = client
+    .channel(`conversation-${conversationId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'conversation_messages',
+        filter: `conversation_id=eq.${conversationId}`,
+      },
+      (payload) => {
+        onMessageChange(payload);
+      }
+    )
+    .subscribe();
+
+  return () => {
+    client.removeChannel(channel);
+  };
+};
+

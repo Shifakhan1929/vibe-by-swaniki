@@ -1,0 +1,290 @@
+'use client';
+
+import React, { useEffect, useState } from 'react';
+import Link from 'next/link';
+import Navbar from '@/components/common/Navbar';
+import Footer from '@/components/common/Footer';
+import UnifiedEventDetailView from '@/components/events/UnifiedEventDetailView';
+import OrganizerProfileView from '@/components/organizer/OrganizerProfileView';
+import { getEvents, getOrganizerByHandle, subscribeToStore, syncEventsWithSupabase, isPublicLiveEvent } from '@/lib/store';
+import { EventItem, Profile } from '@/types';
+import { Compass, ShieldAlert, Sparkles, CheckCircle2 } from 'lucide-react';
+import { ADMIN_EMAILS, ADMIN_BASE_PATH } from '@/lib/adminConstants';
+
+interface EventSlugClientProps {
+  slug: string;
+  initialEvent?: EventItem | null;
+  initialOrganizer?: Profile | null;
+}
+
+export default function EventSlugClient({ slug, initialEvent, initialOrganizer }: EventSlugClientProps) {
+  const [loading, setLoading] = useState(!initialEvent && !initialOrganizer);
+  const [event, setEvent] = useState<EventItem | null>(initialEvent || null);
+  const [organizer, setOrganizer] = useState<Profile | null>(initialOrganizer || null);
+  const [organizerEvents, setOrganizerEvents] = useState<EventItem[]>([]);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [isPublishing, setIsPublishing] = useState(false);
+
+  useEffect(() => {
+    // Check if current user is an administrator
+    try {
+      const match = document.cookie.match(/vibe_auth_email=([^;]+)/);
+      if (match) {
+        const email = decodeURIComponent(match[1]).toLowerCase();
+        if (ADMIN_EMAILS.includes(email)) {
+          setIsAdmin(true);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    const resolveSlug = async () => {
+      const allEvents = getEvents();
+
+      // 1. Check if it's an event slug in local store
+      let foundEvent = allEvents.find(
+        (e) => e.slug.toLowerCase() === slug.toLowerCase()
+      );
+
+      // If initialEvent was provided and local store doesn't have it yet, prioritize initialEvent
+      if (!foundEvent && initialEvent && initialEvent.slug.toLowerCase() === slug.toLowerCase()) {
+        foundEvent = initialEvent;
+      }
+
+      // 2. If not found in local store or initialEvent, fetch via /api/events/by-slug
+      if (!foundEvent) {
+        try {
+          const res = await fetch(`/api/events/by-slug?slug=${encodeURIComponent(slug)}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data && data.event) {
+              const r = data.event;
+              const orgProfile = r.profiles || {};
+              foundEvent = {
+                id: r.id,
+                organizer_id: r.organizer_id || orgProfile.id || 'org-1',
+                organizer_name: orgProfile.name || r.organizer_name || 'Organizer',
+                organizer_handle: orgProfile.handle || r.organizer_handle || 'organizer',
+                organizer_logo: orgProfile.logo_url || r.organizer_logo || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+                organizer_brand_color: orgProfile.brand_color || r.organizer_brand_color || '#E8621A',
+                slug: r.slug,
+                title: r.title,
+                tagline: r.tagline || '',
+                description: r.description || '',
+                cover_image_url: r.cover_image_url,
+                template: r.template || 'grove',
+                theme: r.theme || { palette: 'forest', font: 'Inter + Fraunces', bg_style: 'texture', button_style: 'solid' },
+                sections: r.sections || { speakers: true, agenda: true, gallery: true, faq: true },
+                event_type: r.event_type || 'in-person',
+                location_name: r.location_name,
+                location_address: r.location_address,
+                city: r.city || 'Mumbai',
+                start_at: r.start_at,
+                end_at: r.end_at,
+                timezone: r.timezone || 'Asia/Kolkata',
+                capacity: r.capacity || 50,
+                is_public: r.is_public ?? true,
+                status: r.status || 'live',
+                ai_generated: r.ai_generated || false,
+                faq: r.faq || [],
+                speakers: r.speakers || [],
+                agenda: r.agenda || [],
+                gallery: r.gallery || [],
+                rsvp_form_config: r.rsvp_form_config || { ask_plus_one: true, ask_dietary: true, waitlist_enabled: true },
+                whatsapp_caption: r.whatsapp_caption,
+                instagram_caption: r.instagram_caption,
+                source_type: r.source_type || 'native',
+                source_platform: r.source_platform || undefined,
+                external_ticket_url: r.external_ticket_url || undefined,
+                external_price_text: r.external_price_text || undefined,
+                confidence_score: r.confidence_score || undefined,
+                is_flash: Boolean(
+                  r.is_flash ||
+                  r.theme?.is_flash ||
+                  r.source_type === 'bot' ||
+                  r.source_platform === 'whatsapp' ||
+                  r.created_via === 'bot' ||
+                  r.theme?.created_via === 'bot'
+                ),
+                flash_activity: r.flash_activity || r.theme?.flash_activity,
+                spots_limit: r.spots_limit || r.theme?.spots_limit,
+                spots_filled: r.spots_filled || r.theme?.spots_filled || 0,
+                whatsapp_host_phone: r.whatsapp_host_phone || r.theme?.whatsapp_host_phone || orgProfile.phone || '',
+                vibe_cheers_count: r.vibe_cheers_count || r.theme?.vibe_cheers_count || 0,
+                flash_tags: r.flash_tags || r.theme?.flash_tags || [],
+                created_at: r.created_at,
+                updated_at: r.updated_at,
+              };
+
+              // Persist locally for instant future retrieval
+              if (typeof window !== 'undefined') {
+                try {
+                  const stored = JSON.parse(localStorage.getItem('vibe_events') || '[]');
+                  if (!stored.some((e: any) => e.slug.toLowerCase() === foundEvent!.slug.toLowerCase())) {
+                    localStorage.setItem('vibe_events', JSON.stringify([foundEvent, ...stored]));
+                  }
+                } catch {}
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('Failed to fetch event by slug:', e);
+        }
+      }
+
+      if (foundEvent) {
+        setEvent(foundEvent);
+        setOrganizer(null);
+        setLoading(false);
+        return;
+      }
+
+      // 3. Check if it's an organizer handle
+      const foundOrg = initialOrganizer || getOrganizerByHandle(slug);
+      if (foundOrg) {
+        setOrganizer(foundOrg);
+        setOrganizerEvents(allEvents.filter((e) => e.organizer_id === foundOrg.id && isPublicLiveEvent(e)));
+        setEvent(null);
+        setLoading(false);
+        return;
+      }
+
+      // Neither found - only clear if nothing was preloaded
+      setEvent((prev) => prev || null);
+      setOrganizer((prev) => prev || null);
+      setLoading(false);
+    };
+
+    resolveSlug();
+    syncEventsWithSupabase().catch(() => {});
+    const unsub = subscribeToStore(resolveSlug);
+    return () => unsub();
+  }, [slug, initialEvent, initialOrganizer]);
+
+  const handleAdminPublish = async () => {
+    if (!event) return;
+    setIsPublishing(true);
+    try {
+      const res = await fetch('/api/admin/events', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: event.id,
+          updates: { status: 'live' },
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Failed to publish');
+      }
+      setEvent({ ...event, status: 'live', is_public: true });
+      alert('🚀 Event verified and published live on Vibe!');
+    } catch (err: any) {
+      alert(`Publish error: ${err.message}`);
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#050505] text-[#F3F4F6] flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-[#FF5500] border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  // Render Event Page
+  if (event) {
+    const isDraft = event.status === 'draft';
+    const isExternal = Boolean(
+      event.source_type === 'external' || event.is_external || event.external_ticket_url
+    );
+
+    return (
+      <div className="min-h-screen flex flex-col bg-[#050505] text-[#F3F4F6] transition-colors">
+        {isDraft && (
+          <div className="bg-amber-500/20 border-b border-amber-500/30 px-4 py-2.5 text-xs text-amber-200 flex flex-col sm:flex-row items-center justify-between gap-3 sticky top-0 z-50 backdrop-blur-md">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
+              <span className="font-bold uppercase tracking-wide text-amber-300">
+                {isAdmin ? 'Admin Draft Preview:' : 'Host Direct Preview:'}
+              </span>
+              <span>This event was created via bot/invite and is directly accessible via this link.</span>
+            </div>
+            {isAdmin && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleAdminPublish}
+                  disabled={isPublishing}
+                  className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold font-mono text-xs flex items-center gap-1.5 transition shadow-sm cursor-pointer disabled:opacity-50"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>{isPublishing ? 'Publishing...' : 'Verify & Publish Live'}</span>
+                </button>
+                <Link
+                  href={ADMIN_BASE_PATH}
+                  className="px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-300 hover:text-white text-xs transition"
+                >
+                  Command Center ↗
+                </Link>
+              </div>
+            )}
+          </div>
+        )}
+        {Boolean(event.is_flash || event.source_platform === 'whatsapp' || (event as any).source_type === 'bot') && (
+          <div className="bg-gradient-to-r from-[#E8621A]/20 via-[#E8621A]/10 to-transparent border-b border-[#E8621A]/30 px-4 py-2 text-xs text-white flex items-center justify-between gap-3 sticky top-0 z-40 backdrop-blur-md">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-[#E8621A] animate-pulse shrink-0" />
+              <span className="font-semibold text-white">This meetup is live on Vibe Instant</span>
+            </div>
+            <Link
+              href={`/vibes?event=${encodeURIComponent(event.slug)}`}
+              className="px-3 py-1 rounded-full bg-[#E8621A] hover:bg-[#d05312] text-white font-bold text-xs flex items-center gap-1.5 transition shadow-sm shrink-0"
+            >
+              <span>⚡ Open in Vibe Instant ↗</span>
+            </Link>
+          </div>
+        )}
+        <Navbar />
+        <UnifiedEventDetailView event={event} />
+        <Footer minimal={true} />
+      </div>
+    );
+  }
+
+  // Render Organizer Profile Page
+  if (organizer) {
+    return (
+      <div className="min-h-screen flex flex-col bg-[#050505] text-[#F3F4F6] transition-colors">
+        <Navbar />
+        <OrganizerProfileView organizer={organizer} events={organizerEvents} />
+        <Footer />
+      </div>
+    );
+  }
+
+  // 404 Not Found State
+  return (
+    <div className="min-h-screen bg-[#050505] text-[#F3F4F6] flex flex-col transition-colors">
+      <Navbar />
+      <div className="flex-1 flex flex-col items-center justify-center text-center p-6 space-y-4">
+        <h2 className="font-display font-black text-3xl text-ink">Page Not Found</h2>
+        <p className="text-sm text-ink-muted max-w-sm">
+          The event or organizer profile you are looking for may have been moved or unpublished.
+        </p>
+        <Link
+          href="/discover"
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn bg-brand text-white text-xs font-bold hover:bg-brand-mid shadow-sm"
+        >
+          <Compass className="w-4 h-4 text-accent" />
+          <span>Browse Discover Feed</span>
+        </Link>
+      </div>
+      <Footer />
+    </div>
+  );
+}
